@@ -132,6 +132,11 @@ export async function buildQuotePdf(input: QuoteInput): Promise<Uint8Array> {
   doc.setTitle(`Solution NRJ - ${input.number} ${rev}`);
   doc.setAuthor("Solution NRJ");
   doc.setLanguage("fr-CA");
+  // Dates fixes : les mêmes données donnent exactement le même PDF (nécessaire pour
+  // l'idempotence de Resend, qui refuse une même clé avec un contenu différent).
+  const fixed = new Date(`${input.issuedOn}T12:00:00Z`);
+  doc.setCreationDate(fixed);
+  doc.setModificationDate(fixed);
   const page = doc.addPage([612, 792]); // lettre
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);

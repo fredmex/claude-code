@@ -66,7 +66,7 @@ test("sendOfficialQuote : HubSpot, numéro du registre, PDF archivé et envoyé,
   const contact = JSON.parse(String(calls.find((c) => c.url.endsWith("/crm/v3/objects/contacts"))!.init.body));
   assert.deepEqual(contact.properties, { email: "luc@example.com", firstname: "Luc", lastname: "Tremblay", phone: "8195551234" });
   const quoteBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/quotes"))!.init.body));
-  assert.equal(quoteBody.requestId, "messenger-u1-perkins-60-1");
+  assert.match(quoteBody.requestId, /^messenger-u1-perkins-60-[0-9a-f]{16}$/);
   assert.equal(quoteBody.clientId, "hubspot-501");
   const stage = JSON.parse(String(calls.find((c) => c.url.endsWith("/deals/901"))!.init.body));
   assert.equal(stage.properties.dealstage, "presentationscheduled");
@@ -78,7 +78,7 @@ test("sendOfficialQuote : HubSpot, numéro du registre, PDF archivé et envoyé,
   assert.equal(mail.from, "Solution NRJ <ventes@solutionnrj.com>");
   assert.equal(mail.attachments[0].filename, "S-2026-0042.pdf");
   assert.ok(atob(mail.attachments[0].content).startsWith("%PDF-"));
-  assert.equal((mailCall.init.headers as Record<string, string>)["Idempotency-Key"], "messenger-quote-S-2026-0042-R1");
+  assert.match((mailCall.init.headers as Record<string, string>)["Idempotency-Key"], /^messenger-quote-S-2026-0042-R1-[0-9a-f]{16}$/);
 });
 
 test("contact HubSpot existant : réutilisé sans être modifié, soumission envoyée quand même", async () => {
@@ -125,6 +125,9 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
   assert.match(systemPrompt(), /continue avec CE modèle/);
   assert.match(systemPrompt(), /Perkins 40 kW \[perkins-40\] par défaut/);
+  assert.match(systemPrompt(), /ne dis jamais qu'elle est envoyée/);
+  assert.match(systemPrompt(), /courrier indésirable/);
+  assert.match(systemPrompt(), /ARRÊTE les questions de qualification/);
 });
 
 test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illegal invocation)", async () => {
@@ -136,4 +139,24 @@ test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illega
   } as unknown as typeof fetch;
   const result = await sendOfficialQuote(quoteEnv, request, strictFetch);
   assert.equal(result.number, "S-2026-0042");
+});
+
+test("même soumission retentée : même PDF, même numéro demandé, même clé Resend ; données changées : nouvelle demande", async () => {
+  const pdfInput = { number: "S-2026-0042", revision: 1, issuedOn: "2026-10-16", validUntil: "2027-01-16", client: request.client, model: request.model, quantity: 1, voltage: null };
+  const [a, b] = await Promise.all([buildQuotePdf(pdfInput), buildQuotePdf(pdfInput)]);
+  assert.deepEqual(a, b, "le PDF doit être identique d'un essai à l'autre");
+
+  const keys = async (req: typeof request) => {
+    const { calls, fetchImpl } = fakeBackends();
+    await sendOfficialQuote(quoteEnv, req, fetchImpl);
+    const requestId = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/quotes"))!.init.body)).requestId;
+    const resendKey = (calls.find((c) => c.url === "https://api.resend.com/emails")!.init.headers as Record<string, string>)["Idempotency-Key"];
+    return { requestId, resendKey };
+  };
+  const first = await keys(request);
+  const retry = await keys(request);
+  assert.deepEqual(retry, first);
+  const changed = await keys({ ...request, client: { ...request.client, address: "9 rue Neuve, Québec, G1R 1A1" } });
+  assert.notEqual(changed.requestId, first.requestId);
+  assert.notEqual(changed.resendKey, first.resendKey);
 });

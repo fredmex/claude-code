@@ -45,6 +45,11 @@ export const SIGNATURE_HTML =
 const FROM = "Solution NRJ <ventes@solutionnrj.com>";
 const TEAM = "ventes@solutionnrj.com";
 
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export const isEmail = (s: string) => s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 const escapeHtml = (s: string) =>
@@ -178,7 +183,11 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
   }
   const dealId = await hub.createDeal(contactId, crmLead, "qualifiedtobuy");
 
-  const requestId = `messenger-${req.psid}-${req.model.key}-${req.quantity}`;
+  // Même soumission (mêmes données, même jour) → même numéro ; une donnée change → nouvelle soumission.
+  const fingerprint = await sha256Hex(
+    JSON.stringify([req.psid, req.model.key, req.quantity, req.voltage, req.issuedOn, req.client.fullName, req.client.company, req.client.email, req.client.phone, req.client.address]),
+  );
+  const requestId = `messenger-${req.psid}-${req.model.key}-${fingerprint.slice(0, 16)}`;
   const quote = await reserveQuoteNumber(env, { ...req, contactId }, requestId, fetchImpl);
   const revision = quote.revision || 1;
   const validUntil = addMonths(req.issuedOn);
@@ -211,9 +220,7 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
     "",
     "Pour accepter, signez la soumission et retournez-la par courriel.",
   ];
-  const emailId = await sendEmail(
-    env,
-    {
+  const payload = {
       from: FROM,
       to: [req.client.email],
       bcc: [TEAM],
@@ -222,10 +229,11 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
       text: lines.join("\n") + `\n\nSolution NRJ\nhttps://${SUPPLIER.web}\n${SUPPLIER.phone}`,
       html: html(lines),
       attachments: [{ filename: `${quote.number}.pdf`, content: toBase64(pdf) }],
-    },
-    `messenger-quote-${quote.number}-R${revision}`,
-    fetchImpl,
-  );
+  };
+  // La clé couvre tout le contenu : un nouvel essai identique n'envoie rien de plus,
+  // un contenu différent obtient sa propre clé au lieu d'un refus 409 de Resend.
+  const contentHash = (await sha256Hex(JSON.stringify(payload))).slice(0, 16);
+  const emailId = await sendEmail(env, payload, `messenger-quote-${quote.number}-R${revision}-${contentHash}`, fetchImpl);
 
   // Le courriel est accepté par Resend : ce n'est pas une preuve de réception.
   await hub.setDealStage(dealId, "presentationscheduled");
