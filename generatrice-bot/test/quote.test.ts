@@ -112,3 +112,14 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /Ne demande jamais la quantité/);
   assert.match(systemPrompt(), /monophasé ou triphasé/);
 });
+
+test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illegal invocation)", async () => {
+  const { fetchImpl } = fakeBackends();
+  // Comme le fetch de Workers : refuse un appel dont `this` est un autre objet.
+  const strictFetch = function (this: unknown, url: string, init: RequestInit) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+    return fetchImpl(url, init);
+  } as unknown as typeof fetch;
+  const result = await sendOfficialQuote(quoteEnv, request, strictFetch);
+  assert.equal(result.number, "S-2026-0042");
+});

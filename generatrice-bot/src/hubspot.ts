@@ -40,7 +40,9 @@ export class HubSpot {
 
   constructor(env: HubSpotEnv, fetchImpl: typeof fetch = fetch) {
     this.env = env;
-    this.fetchImpl = fetchImpl;
+    // Fonction fléchée : appeler le fetch global comme méthode (this = HubSpot)
+    // déclenche « Illegal invocation » dans Workers.
+    this.fetchImpl = (input, init) => fetchImpl(input, init);
   }
 
   async request<T = any>(path: string, { method = "GET", body, form }: { method?: string; body?: unknown; form?: FormData } = {}): Promise<T> {
