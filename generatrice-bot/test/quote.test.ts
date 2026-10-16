@@ -118,10 +118,9 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /Ne demande jamais de planifier/);
   assert.doesNotMatch(systemPrompt(), /meilleur moment/);
   assert.match(systemPrompt(), /même si un envoi précédent a échoué/);
-  assert.match(systemPrompt(), /Ne demande jamais la quantité/);
-  assert.match(systemPrompt(), /monophasé ou triphasé/);
-  assert.match(systemPrompt(), /pour compléter la soumission/);
-  assert.match(systemPrompt(), /entreprise ou à titre personnel/);
+  assert.match(systemPrompt(), /Ne demande ni la tension, ni les phases, ni le boîtier, ni la quantité/);
+  assert.match(systemPrompt(), /UN SEUL message/);
+  assert.match(systemPrompt(), /n'insiste jamais pour le code postal/);
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
   assert.match(systemPrompt(), /continue avec CE modèle/);
   assert.match(systemPrompt(), /Perkins 40 kW \[perkins-40\] par défaut/);

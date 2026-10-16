@@ -73,8 +73,9 @@ export class HubSpot {
       body: { filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: lead.email.toLowerCase() }] }], properties: ["email"], limit: 2 },
     });
     if (found.total) return { id: found.results[0].id, existing: true };
-    const [firstname, ...rest] = lead.fullName.trim().split(/\s+/);
-    const properties: Record<string, string> = { email: lead.email.toLowerCase(), firstname };
+    const [firstname, ...rest] = lead.fullName.trim().split(/\s+/).filter(Boolean);
+    const properties: Record<string, string> = { email: lead.email.toLowerCase() };
+    if (firstname) properties.firstname = firstname;
     if (rest.length) properties.lastname = rest.join(" ");
     if (lead.phone) properties.phone = lead.phone;
     if (lead.company) properties.company = lead.company.slice(0, 254);

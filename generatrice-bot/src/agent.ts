@@ -7,7 +7,7 @@ import { systemPrompt } from "./business.ts";
 import { findModel, MODEL_KEYS, QUOTABLE_KEYS } from "./catalogue.ts";
 import { emptyLead, mergeLead, missingFields, normalizePhone, type Lead, type LeadUpdate } from "./leads.ts";
 import { descriptionRows, formatMoney } from "./quote-pdf.ts";
-import { isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
+import { isEmail, quoteSendingEnabled, recordSpecSheetContact, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
 
 /** Historique conservé entre deux messages : uniquement le texte échangé. */
 export interface Turn {
@@ -80,8 +80,8 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         full_name: { type: "string", description: "Nom complet du client." },
         company: nullable("string", "Nom de l'entreprise si la soumission est au nom d'une entreprise ; null si elle est à titre personnel."),
         email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
-        phone: { type: "string", description: "Téléphone du client, pour compléter la soumission." },
-        address: { type: "string", description: "Adresse complète pour la soumission : numéro, rue, ville, code postal." },
+        phone: nullable("string", "Téléphone du client ; null s'il ne l'a pas donné."),
+        address: nullable("string", "Adresse si le client l'a donnée, même incomplète ; sinon null."),
         voltage: nullable("string", "Tension demandée, ex. « 120/240 V » ou « 600 V » ; null pour celle du catalogue."),
         quantity: { type: "integer", description: "Nombre d'unités : 1, sauf si le client a lui-même demandé plusieurs unités. Ne pose jamais la question." },
         client_confirmed: { type: "boolean", description: "true seulement si le client vient de confirmer explicitement le récapitulatif." },
@@ -92,16 +92,18 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "email_spec_sheet",
-    description: "Envoie par courriel la fiche détaillée d'un modèle (caractéristiques, prix avant taxes, lien photos). Aucun numéro de soumission.",
+    description: "Envoie par courriel la fiche détaillée d'un modèle (caractéristiques, prix avant taxes, lien photos) et enregistre le contact dans HubSpot. Aucun numéro de soumission.",
     strict: true,
     input_schema: {
       type: "object",
       properties: {
         model_key: { type: "string", enum: MODEL_KEYS, description: "Clé du modèle." },
         email: { type: "string", description: "Courriel du client." },
-        name: nullable("string", "Prénom ou nom du client."),
+        name: nullable("string", "Nom du client."),
+        company: nullable("string", "Entreprise du client, s'il y a lieu."),
+        phone: nullable("string", "Téléphone du client, s'il l'a donné."),
       },
-      required: ["model_key", "email", "name"],
+      required: ["model_key", "email", "name", "company", "phone"],
       additionalProperties: false,
     },
   },
@@ -173,9 +175,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       const email = String(args.email).trim().toLowerCase();
       const fullName = String(args.full_name).trim();
       if (!isEmail(email) || !fullName) return { isError: true, content: "Nom complet ou courriel invalide : redemande-les au client." };
-      const address = String(args.address ?? "").trim();
-      if (address.length < 8) return { isError: true, content: "Il manque l'adresse complète pour la soumission (numéro, rue, ville, code postal) : demande-la au client." };
-      if (typeof args.phone !== "string" || !normalizePhone(args.phone)) return { isError: true, content: "Il manque un numéro de téléphone valide pour compléter la soumission : demande-le au client." };
+      const address = typeof args.address === "string" && args.address.trim() ? args.address.trim() : null;
       const quantity = Math.max(1, Math.min(20, Math.floor(Number(args.quantity) || 1)));
       const phone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
       state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { name: fullName, email, phone, company: args.company as string | null }, input.now);
@@ -235,12 +235,17 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       if (!model) return { isError: true, content: "Modèle inconnu." };
       const email = String(args.email).trim().toLowerCase();
       if (!isEmail(email)) return { isError: true, content: "Courriel invalide : redemande-le." };
-      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: args.name as string | null }, input.now);
+      const specPhone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: args.name as string | null, company: args.company as string | null, phone: specPhone }, input.now);
       if (!quoteEnv?.RESEND_API_KEY || quoteEnv.QUOTATION_EMAIL_ENABLED !== "true") {
         return { isError: true, content: `L'envoi de courriels n'est pas activé. Donne plutôt au client le lien de la fiche : ${model.url}` };
       }
       try {
         await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: args.name as string | null, rows: descriptionRows(model, null) }, doFetch);
+        // Contact HubSpot : une erreur ici n'empêche pas l'envoi déjà fait.
+        await recordSpecSheetContact(quoteEnv, { model, email, name: args.name as string | null, company: (args.company as string | null) || null, phone: specPhone }, doFetch).catch((error) =>
+          console.error("hubspot_fiche", error),
+        );
         return { content: JSON.stringify({ sent: true, email }) };
       } catch (error) {
         console.error("email_spec_sheet", error);

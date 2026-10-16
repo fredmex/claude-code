@@ -271,3 +271,32 @@ export async function sendSpecSheet(
     fetchImpl,
   );
 }
+
+/** Fiche envoyée : retrouve ou crée le contact HubSpot (jamais modifié) et note la demande. */
+export async function recordSpecSheetContact(
+  env: QuoteEnv,
+  args: { model: Model; email: string; name: string | null; company: string | null; phone: string | null },
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  if (!hubspotEnabled(env)) return null;
+  const hub = new HubSpot(env, fetchImpl);
+  const contact = await hub.findOrCreateContact({
+    fullName: args.name ?? "",
+    email: args.email,
+    phone: args.phone,
+    company: args.company,
+    address: null,
+    powerKw: args.model.powerKw,
+  });
+  await hub.note(
+    contact.id,
+    [
+      `Fiche envoyée par Messenger : ${args.model.name.replace(/ \(ouverte\)$/, "")}.`,
+      contact.existing ? "Contact existant, champs non modifiés. Informations données :" : "Informations données :",
+      args.name ? `Nom : ${args.name}` : null,
+      args.company ? `Entreprise : ${args.company}` : null,
+      args.phone ? `Téléphone : ${args.phone}` : null,
+    ].filter(Boolean).join("\n"),
+  );
+  return contact.id;
+}

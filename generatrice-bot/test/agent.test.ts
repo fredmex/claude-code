@@ -123,12 +123,27 @@ test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé,
   assert.equal(claude.requests[1].messages.at(-1).content[0].is_error, true);
 });
 
-test("send_quote sans adresse ni téléphone : le bot doit les demander", async () => {
+test("send_quote sans adresse ni téléphone : la soumission part quand même", async () => {
+  const backends = fakeBackends();
   const claude = fakeClaude([
-    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: "514 555-1111", address: "", voltage: null, quantity: 1, client_confirmed: true } }] },
-    { stop_reason: "end_turn", content: [{ type: "text", text: "Quelle est l'adresse complète pour la soumission?" }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: null, address: null, voltage: null, quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "Votre soumission S-2026-0042 a été envoyée par courriel à marc@example.com. Si vous avez d'autres questions, vous pouvez me les poser." }] },
   ]);
-  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: claude.fetch, quoteEnv });
-  assert.equal(result.quote, null);
-  assert.match(claude.requests[1].messages.at(-1).content[0].content, /adresse complète/);
+  const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv });
+  assert.equal(result.quote?.number, "S-2026-0042");
+});
+
+test("fiche par courriel : contact enregistré dans HubSpot avec nom, entreprise et téléphone", async () => {
+  const backends = fakeBackends();
+  const claude = fakeClaude([
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "email_spec_sheet", input: { model_key: "perkins-40", email: "julie@example.com", name: "Julie Roy", company: "Ferme Roy", phone: "450 555-0000" } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "La fiche est partie. Voulez-vous aussi une soumission officielle?" }] },
+  ]);
+  const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "Julie Roy, Ferme Roy, julie@example.com, 450 555-0000" }], lead: null, fetch: fetchImpl, quoteEnv });
+  const contact = JSON.parse(String(backends.calls.find((c) => c.url.endsWith("/crm/v3/objects/contacts"))!.init.body));
+  assert.deepEqual(contact.properties, { email: "julie@example.com", firstname: "Julie", lastname: "Roy", phone: "4505550000", company: "Ferme Roy" });
+  assert.ok(backends.calls.some((c) => c.url === "https://api.resend.com/emails"));
+  assert.equal(result.lead?.company, "Ferme Roy");
 });
