@@ -326,3 +326,15 @@ npm run dev                       # http://localhost:8787
 npm run typecheck
 npm test
 ```
+
+## Essai : boutons, carrousel et questions d'accueil (src/rich.ts)
+
+- `MESSENGER_RICH = "true"` (wrangler.toml) : réponses rapides (puissance, budget) et
+  carrousel de modèles (prix avant taxes, « Recevoir la fiche », « Voir sur le site »).
+  Mettre `"false"` et redéployer pour revenir au bot purement texte.
+- Photos des cartes : champ `imageUrl` du catalogue (vide = carte sans photo ; n'y mettre
+  que de vraies URL d'images du site).
+- Questions d'accueil : réglage de la Page, visible par TOUS les visiteurs. Jamais appliqué
+  au déploiement. À l'ouverture au public :
+  - activer : `curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" https://solution-nrj-messenger.monscorbu.workers.dev/admin/ice-breakers`
+  - retirer : même commande avec `-X DELETE`.
