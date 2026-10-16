@@ -44,7 +44,12 @@ const REFUSAL_REPLY =
 
 const nullable = (type: string, description: string) => ({ type: [type, "null"], description });
 
-const TOOLS: Anthropic.Beta.BetaTool[] = [
+// L'API refuse plus de 16 champs « type: [x, null] » (unions) au total dans les outils
+// stricts : seuls ceux de save_lead en utilisent ; ailleurs, chaîne vide = inconnu.
+export const MAX_UNION_PARAMS = 16;
+const optionalText = (description: string) => ({ type: "string", description: `${description} Chaîne vide si inconnu.` });
+
+export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "save_lead",
     description:
@@ -78,11 +83,11 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
       properties: {
         model_key: { type: "string", enum: QUOTABLE_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
         full_name: { type: "string", description: "Nom complet du client." },
-        company: nullable("string", "Nom de l'entreprise si la soumission est au nom d'une entreprise ; null si elle est à titre personnel."),
+        company: optionalText("Nom de l'entreprise si la soumission est au nom d'une entreprise ; vide si elle est à titre personnel."),
         email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
-        phone: nullable("string", "Téléphone du client ; null s'il ne l'a pas donné."),
-        address: nullable("string", "Adresse si le client l'a donnée, même incomplète ; sinon null."),
-        voltage: nullable("string", "Tension demandée, ex. « 120/240 V » ou « 600 V » ; null pour celle du catalogue."),
+        phone: optionalText("Téléphone du client."),
+        address: optionalText("Adresse si le client l'a donnée, même incomplète."),
+        voltage: optionalText("Tension demandée par le client, ex. « 600 V » ; vide pour celle du catalogue."),
         quantity: { type: "integer", description: "Nombre d'unités : 1, sauf si le client a lui-même demandé plusieurs unités. Ne pose jamais la question." },
         client_confirmed: { type: "boolean", description: "true seulement si le client vient de confirmer explicitement le récapitulatif." },
       },
@@ -99,9 +104,9 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
       properties: {
         model_key: { type: "string", enum: MODEL_KEYS, description: "Clé du modèle." },
         email: { type: "string", description: "Courriel du client." },
-        name: nullable("string", "Nom du client."),
-        company: nullable("string", "Entreprise du client, s'il y a lieu."),
-        phone: nullable("string", "Téléphone du client, s'il l'a donné."),
+        name: optionalText("Nom du client."),
+        company: optionalText("Entreprise du client, s'il y a lieu."),
+        phone: optionalText("Téléphone du client."),
       },
       required: ["model_key", "email", "name", "company", "phone"],
       additionalProperties: false,
@@ -178,7 +183,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       const address = typeof args.address === "string" && args.address.trim() ? args.address.trim() : null;
       const quantity = Math.max(1, Math.min(20, Math.floor(Number(args.quantity) || 1)));
       const phone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
-      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { name: fullName, email, phone, company: args.company as string | null }, input.now);
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { name: fullName, email, phone, company: (args.company as string) || null }, input.now);
 
       if (!quoteEnv || !quoteSendingEnabled(quoteEnv)) {
         state.lead = { ...state.lead, notes: [state.lead.notes, `Soumission demandée : ${model.name} × ${quantity} (envoi automatique désactivé)`].filter(Boolean).join(" — ") };
@@ -194,7 +199,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
             psid: input.psid,
             model,
             quantity,
-            voltage: typeof args.voltage === "string" ? args.voltage : null,
+            voltage: typeof args.voltage === "string" && args.voltage.trim() ? args.voltage.trim() : null,
             issuedOn: input.now.slice(0, 10),
             client: {
               fullName,
@@ -236,14 +241,14 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       const email = String(args.email).trim().toLowerCase();
       if (!isEmail(email)) return { isError: true, content: "Courriel invalide : redemande-le." };
       const specPhone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
-      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: args.name as string | null, company: args.company as string | null, phone: specPhone }, input.now);
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: (args.name as string) || null, company: (args.company as string) || null, phone: specPhone }, input.now);
       if (!quoteEnv?.RESEND_API_KEY || quoteEnv.QUOTATION_EMAIL_ENABLED !== "true") {
         return { isError: true, content: `L'envoi de courriels n'est pas activé. Donne plutôt au client le lien de la fiche : ${model.url}` };
       }
       try {
-        await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: args.name as string | null, rows: descriptionRows(model, null) }, doFetch);
+        await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: (args.name as string) || null, rows: descriptionRows(model, null) }, doFetch);
         // Contact HubSpot : une erreur ici n'empêche pas l'envoi déjà fait.
-        await recordSpecSheetContact(quoteEnv, { model, email, name: args.name as string | null, company: (args.company as string | null) || null, phone: specPhone }, doFetch).catch((error) =>
+        await recordSpecSheetContact(quoteEnv, { model, email, name: (args.name as string) || null, company: (args.company as string | null) || null, phone: specPhone }, doFetch).catch((error) =>
           console.error("hubspot_fiche", error),
         );
         return { content: JSON.stringify({ sent: true, email }) };

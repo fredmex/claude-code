@@ -147,3 +147,16 @@ test("fiche par courriel : contact enregistré dans HubSpot avec nom, entreprise
   assert.ok(backends.calls.some((c) => c.url === "https://api.resend.com/emails"));
   assert.equal(result.lead?.company, "Ferme Roy");
 });
+
+test("outils stricts : au plus 16 champs à type union (limite de l'API Claude)", async () => {
+  const { TOOLS, MAX_UNION_PARAMS } = await import("../src/agent.ts");
+  let unions = 0;
+  for (const tool of TOOLS) {
+    const schema = tool.input_schema as { properties: Record<string, { type?: unknown; anyOf?: unknown }>; required: string[]; additionalProperties: boolean };
+    // Exigences du mode strict : tout est requis et rien d'autre n'est permis.
+    assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort(), tool.name);
+    assert.equal(schema.additionalProperties, false, tool.name);
+    for (const prop of Object.values(schema.properties)) if (Array.isArray(prop.type) || prop.anyOf) unions++;
+  }
+  assert.ok(unions <= MAX_UNION_PARAMS, `${unions} champs union`);
+});
