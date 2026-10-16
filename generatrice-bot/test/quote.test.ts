@@ -120,6 +120,7 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /même si un envoi précédent a échoué/);
   assert.match(systemPrompt(), /Ne demande ni la tension, ni les phases, ni le boîtier, ni la quantité/);
   assert.match(systemPrompt(), /UN SEUL message/);
+  assert.match(systemPrompt(), /Ne demande jamais la ville/);
   assert.match(systemPrompt(), /n'insiste jamais pour le code postal/);
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
   assert.match(systemPrompt(), /continue avec CE modèle/);

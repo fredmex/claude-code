@@ -64,7 +64,6 @@ export function missingFields(lead: Lead): string[] {
   const missing: string[] = [];
   if (!lead.usage) missing.push("usage");
   if (lead.power_kw === null) missing.push("power_kw");
-  if (!lead.city) missing.push("city");
   if (!lead.phone && !lead.email) missing.push("phone");
   return missing;
 }
@@ -108,7 +107,7 @@ export function describeLead(lead: Lead): string {
     lead.company ? `Entreprise : ${lead.company}` : null,
     `Téléphone : ${lead.phone ?? "?"}`,
     lead.email ? `Courriel : ${lead.email}` : null,
-    `Ville : ${lead.city ?? "?"}`,
+    lead.city ? `Ville : ${lead.city}` : null,
     `Puissance : ${lead.power_kw !== null ? `${lead.power_kw} kW` : "?"}`,
     `Usage : ${lead.usage ?? "?"}`,
     lead.voltage ? `Tension : ${lead.voltage}` : null,

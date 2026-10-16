@@ -53,7 +53,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "save_lead",
     description:
-      "Enregistre ce que tu sais du besoin du client dans sa fiche prospect. Appelle-le dès que tu apprends une nouvelle information (usage, puissance, ville, tension, boîtier, nom, téléphone…). Mets null pour ce que tu ne sais pas : les valeurs déjà enregistrées sont conservées. Le résultat indique la fiche à jour et ce qu'il manque.",
+      "Enregistre ce que tu sais du besoin du client dans sa fiche prospect. Appelle-le dès que tu apprends une nouvelle information (usage, puissance, nom, entreprise, courriel, téléphone…). Mets null pour ce que tu ne sais pas : les valeurs déjà enregistrées sont conservées. Le résultat indique la fiche à jour et ce qu'il manque.",
     strict: true,
     input_schema: {
       type: "object",
@@ -62,7 +62,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
         company: nullable("string", "Entreprise du client, s'il y a lieu."),
         usage: nullable("string", "Usage prévu, en quelques mots : secours maison, chalet, ferme, chantier, commerce, industriel, hors réseau…"),
         power_kw: nullable("number", "Puissance souhaitée ou estimée, en kW."),
-        city: nullable("string", "Ville ou région d'installation."),
+        city: nullable("string", "Ville, seulement si le client l'a donnée de lui-même (ne la demande jamais)."),
         voltage: nullable("string", "Tension et phases, ex. « 120/240 V monophasé », « 600 V triphasé »."),
         enclosure: nullable("string", "« fermé insonorisé » ou « ouvert »."),
         phone: nullable("string", "Numéro de téléphone donné par le client, tel quel."),
