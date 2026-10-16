@@ -258,7 +258,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
         return { content: JSON.stringify({ sent: true, email }) };
       } catch (error) {
         console.error("email_spec_sheet", error);
-        return { isError: true, content: `L'envoi a échoué. Donne au client le lien de la fiche : ${model.url}` };
+        return { isError: true, content: `L'envoi a échoué. Ne dis pas que la fiche est envoyée et ne transfère pas pour cette raison : donne au client le lien de la fiche, ${model.url}` };
       }
     }
 

@@ -264,12 +264,11 @@ export async function sendSpecSheet(
     "",
     "Pour une soumission officielle, répondez à ce courriel ou écrivez-nous sur Messenger.",
   ].filter((l, i, a) => l !== "" || a[i - 1] !== "");
-  return sendEmail(
-    env,
-    { from: FROM, to: [args.email], reply_to: TEAM, subject: `Fiche — ${title}`, text: lines.join("\n"), html: html(lines) },
-    `messenger-fiche-${args.psid}-${m.key}`,
-    fetchImpl,
-  );
+  const payload = { from: FROM, to: [args.email], reply_to: TEAM, subject: `Fiche — ${title}`, text: lines.join("\n"), html: html(lines) };
+  // Comme pour la soumission : la clé couvre tout le contenu, sinon Resend refuse
+  // (409) une fiche renvoyée dans les 24 h avec un texte ou un nom différent.
+  const contentHash = (await sha256Hex(JSON.stringify(payload))).slice(0, 16);
+  return sendEmail(env, payload, `messenger-fiche-${args.psid}-${m.key}-${contentHash}`, fetchImpl);
 }
 
 /** Fiche envoyée : retrouve ou crée le contact HubSpot (jamais modifié) et note la demande. */

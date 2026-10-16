@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CATALOGUE, findModel, phasesFor } from "../src/catalogue.ts";
 import { addMonths, buildQuotePdf, computeTotals, descriptionRows, formatMoney } from "../src/quote-pdf.ts";
-import { sendOfficialQuote } from "../src/quote-service.ts";
+import { sendOfficialQuote, sendSpecSheet } from "../src/quote-service.ts";
 import { PDFDocument } from "pdf-lib";
 import { fakeBackends, quoteEnv } from "./helpers.ts";
 
@@ -169,4 +169,28 @@ test("même soumission retentée : même PDF, même numéro demandé, même clé
   const changed = await keys({ ...request, client: { ...request.client, address: "9 rue Neuve, Québec, G1R 1A1" } });
   assert.notEqual(changed.requestId, first.requestId);
   assert.notEqual(changed.resendKey, first.resendKey);
+});
+
+test("fiche renvoyée dans les 24 h avec un contenu différent : nouvelle clé Resend, pas de 409", async () => {
+  // Faux Resend qui applique l'idempotence : même clé avec un autre contenu = 409.
+  const sent = new Map<string, string>();
+  const keys: string[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit = {}) => {
+    const key = new Headers(init.headers).get("Idempotency-Key")!;
+    keys.push(key);
+    const body = String(init.body);
+    if (sent.has(key) && sent.get(key) !== body) return new Response("{}", { status: 409 });
+    sent.set(key, body);
+    return Response.json({ id: `email_${sent.size}` });
+  }) as unknown as typeof fetch;
+  const model = findModel("perkins-40")!;
+  const send = (name: string | null) =>
+    sendSpecSheet(quoteEnv, { psid: "p1", model, email: "client@exemple.ca", name, rows: descriptionRows(model, null) }, fetchImpl);
+
+  await send(null);
+  await send("Frederic Test"); // nom pris du profil : contenu différent
+  await send("Frederic Test"); // même envoi retenté : même clé, rien de plus
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(keys[1], keys[2]);
+  assert.equal(sent.size, 2);
 });
