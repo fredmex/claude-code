@@ -18,8 +18,6 @@ export interface Model {
   stock: string | null;
   notes: string | null;
   url: string;
-  /** Photo du site pour les cartes Messenger ; null = carte sans photo (ne jamais inventer d'URL). */
-  imageUrl: string | null;
   /** Soumission automatique permise (modèle du catalogue de soumissions officiel). */
   quotable: boolean;
 }
@@ -48,7 +46,6 @@ function perkins(kw: number, fields: Partial<Model> & { key?: string }): Model {
     stock: null,
     notes: null,
     url: productUrl(kw),
-    imageUrl: null,
     quotable: false,
     ...fields,
   };
@@ -76,7 +73,6 @@ export const CATALOGUE: Model[] = [
     stock: null,
     notes: "Pas de soumission automatique : un conseiller la prépare.",
     url: "https://generatricediesel.com/product/kubotaa-generatrice-diesel-40kw/",
-    imageUrl: null,
     quotable: false,
   },
   {
@@ -93,7 +89,6 @@ export const CATALOGUE: Model[] = [
     stock: null,
     notes: "Pas de soumission automatique : un conseiller la prépare.",
     url: "https://generatricediesel.com/product/kubotaa-generatrice-diesel-40kw/",
-    imageUrl: null,
     quotable: false,
   },
   perkins(50, { quotable: true, priceCad: 31000, engine: "Perkins diesel 1104A-44, 4 cylindres, 4,4 L", voltage: "120/240 V", tankLitres: 400 }),

@@ -1,9 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runAgent, type Turn } from "./agent.ts";
 import { emptyLead, leadsToCsv, listLeads, notifyTeam, putLead, type Lead } from "./leads.ts";
-import { carouselElements, historyNote, parseRich, postbackText, removeIceBreakers, richEnabled, setIceBreakers } from "./rich.ts";
 import { AD_GREETING, customerGate, DAILY_REPLY_LIMIT, stopRequested, type GuardEnv } from "./guards.ts";
-import { BOT_METADATA, sendAction, sendCarousel, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
+import { BOT_METADATA, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
 
 export interface Env extends GuardEnv {
   BOT_STATE: KVNamespace;
@@ -24,8 +23,6 @@ export interface Env extends GuardEnv {
   RESEND_API_KEY?: string;
   HUBSPOT_ACCESS_TOKEN?: string;
   HUBSPOT_WRITES_ENABLED?: string;
-  // Essai : boutons, carrousel (voir src/rich.ts).
-  MESSENGER_RICH?: string;
 }
 
 /** État d'une conversation : lecture et écriture immédiatement cohérentes. */
@@ -126,7 +123,6 @@ export default {
     if (url.pathname === "/") return new Response("Bot Messenger actif.", { status: 200 });
     if (url.pathname === "/leads") return exportLeads(request, url, env);
     if (url.pathname === "/admin/resume") return resumeBot(request, url, env);
-    if (url.pathname === "/admin/ice-breakers") return iceBreakers(request, url, env);
     if (url.pathname !== "/webhook") return new Response("Not found", { status: 404 });
 
     // Vérification de l'URL de rappel par Meta.
@@ -204,20 +200,6 @@ async function resumeBot(request: Request, url: URL, env: Env): Promise<Response
   const reset = url.searchParams.get("reset") === "1";
   await conversationFor(env, psid).fetch(`https://conversation/clear?reset=${reset ? 1 : 0}`, { method: "POST" });
   return Response.json({ resumed: psid, reset });
-}
-
-/**
- * Questions d'accueil de la Page (visibles par TOUS les visiteurs) : jamais au déploiement.
- * POST /admin/ice-breakers pour les activer, DELETE pour les retirer (Bearer ADMIN_TOKEN).
- */
-async function iceBreakers(request: Request, url: URL, env: Env): Promise<Response> {
-  const key = request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? url.searchParams.get("key");
-  if (!env.ADMIN_TOKEN || !key || !(await timingSafeEqual(key, env.ADMIN_TOKEN))) return new Response("Unauthorized", { status: 401 });
-  if (request.method !== "POST" && request.method !== "DELETE") return new Response("Method not allowed", { status: 405 });
-  const res = request.method === "POST" ? await setIceBreakers(env.META_PAGE_ACCESS_TOKEN) : await removeIceBreakers(env.META_PAGE_ACCESS_TOKEN);
-  const detail = await res.text();
-  console.log(`Questions d'accueil ${request.method === "POST" ? "activées" : "retirées"} : ${res.status}`);
-  return Response.json({ ok: res.ok, status: res.status, detail: detail.slice(0, 500) }, { status: res.ok ? 200 : 502 });
 }
 
 /** Retire pause, arrêt et compteur du jour ; avec reset, efface aussi l'historique et la fiche. */
@@ -321,7 +303,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
   const historyNotes: string[] = [];
   if (event.postback) {
-    const text = postbackText(event.postback);
+    const text = event.postback.payload === "GET_STARTED" ? "Bonjour" : event.postback.title;
     content.push({ type: "text", text });
     historyNotes.push(text);
   }
@@ -361,7 +343,6 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
       psid,
       now,
       quoteEnv: env,
-      rich: richEnabled(env),
     });
   } catch (error) {
     logError(error);
@@ -373,16 +354,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
     return;
   }
 
-  // Les balises de boutons et de cartes sont toujours retirées du texte ; elles ne
-  // deviennent des éléments Messenger que si l'essai est activé.
-  const rich = parseRich(result.reply);
-  if (richEnabled(env) && rich.models.length) {
-    if (rich.text) await sendText(token, psid, rich.text);
-    await sendCarousel(token, psid, carouselElements(rich.models), rich.quickReplies);
-  } else {
-    await sendText(token, psid, rich.text || result.reply, richEnabled(env) ? rich.quickReplies : []);
-  }
-  const replyForHistory = [rich.text, richEnabled(env) ? historyNote(rich.models) : null].filter(Boolean).join("\n");
+  await sendText(token, psid, result.reply);
 
   let lead = result.lead;
   if (result.transferReason) {
@@ -409,7 +381,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
 
   // On garde les derniers échanges (texte seulement), en commençant toujours par un message du client.
   let trimmed: Turn[] = history
-    .concat({ role: "user", text: historyNotes.join("\n") }, { role: "assistant", text: replyForHistory || result.reply })
+    .concat({ role: "user", text: historyNotes.join("\n") }, { role: "assistant", text: result.reply })
     .slice(-MAX_HISTORY_TURNS);
   while (trimmed.length > 0 && trimmed[0].role !== "user") trimmed = trimmed.slice(1);
   await store.put("history", trimmed, HISTORY_TTL_SECONDS);

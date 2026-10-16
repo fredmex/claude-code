@@ -93,30 +93,14 @@ async function callSendApi(pageAccessToken: string, body: object): Promise<void>
   }
 }
 
-/** Envoie un texte ; les réponses rapides éventuelles vont sur le dernier morceau. */
-export async function sendText(pageAccessToken: string, recipientId: string, text: string, quickReplies: object[] = []): Promise<void> {
-  const parts = splitMessage(text);
-  for (const [i, part] of parts.entries()) {
-    const last = i === parts.length - 1;
+export async function sendText(pageAccessToken: string, recipientId: string, text: string): Promise<void> {
+  for (const part of splitMessage(text)) {
     await callSendApi(pageAccessToken, {
       recipient: { id: recipientId },
       messaging_type: "RESPONSE",
-      message: { text: part, metadata: BOT_METADATA, ...(last && quickReplies.length ? { quick_replies: quickReplies } : {}) },
+      message: { text: part, metadata: BOT_METADATA },
     });
   }
-}
-
-/** Carrousel de cartes (modèle générique de Messenger). */
-export async function sendCarousel(pageAccessToken: string, recipientId: string, elements: object[], quickReplies: object[] = []): Promise<void> {
-  await callSendApi(pageAccessToken, {
-    recipient: { id: recipientId },
-    messaging_type: "RESPONSE",
-    message: {
-      attachment: { type: "template", payload: { template_type: "generic", elements } },
-      metadata: BOT_METADATA,
-      ...(quickReplies.length ? { quick_replies: quickReplies } : {}),
-    },
-  });
 }
 
 export async function sendAction(

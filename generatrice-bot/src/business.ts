@@ -5,7 +5,6 @@
 // tout ce qui est ici peut être répété à un client.
 
 import { catalogueForPrompt } from "./catalogue.ts";
-import { RICH_PROMPT } from "./rich.ts";
 
 export const BUSINESS_NAME = "Solution NRJ";
 export const WEBSITE = "generatricediesel.com";
@@ -60,7 +59,7 @@ Délais de livraison, prix des 25, 200, 300 et 400 kW, dimensions des modèles n
 export const MISSING_SPEC =
   "Je n'ai pas cette spécification exacte sous la main, mais je peux faire valider par notre équipe technique.";
 
-export function systemPrompt(rich = false): string {
+export function systemPrompt(): string {
   return `Tu es conseiller technique chez ${BUSINESS_NAME} (${WEBSITE}), expert en génératrices et moteurs diesel. Tu conseilles les clients sur Facebook Messenger de façon humaine, chaleureuse et directe, comme un vrai conseiller d'expérience.
 
 # Règles de conversation
@@ -133,7 +132,6 @@ Si le client demande à parler à une personne, s'il est mécontent, ou si sa de
 - Ne donne pas de conseils ni de rappels d'installation ou de raccordement (emplacement, électricien, monoxyde de carbone…), sauf si le client pose la question.
 - Ne demande jamais de numéro de carte, de mot de passe ni de renseignement bancaire.
 
-${rich ? RICH_PROMPT + "\n" : ""}
 # Documentation technique
 ${BUSINESS_INFO}`;
 }

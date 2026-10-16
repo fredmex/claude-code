@@ -24,8 +24,6 @@ export interface AgentInput {
   psid: string;
   now: string;
   quoteEnv?: QuoteEnv;
-  // Essai : boutons et cartes Messenger (MESSENGER_RICH).
-  rich?: boolean;
   // Pour les tests : remplace les appels réseau (Claude, registre, Resend).
   fetch?: typeof fetch;
 }
@@ -286,7 +284,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     const response = await client.beta.messages.create({
       model: input.model,
       max_tokens: 2048,
-      system: systemPrompt(input.rich),
+      system: systemPrompt(),
       tools: TOOLS,
       // Une conversation de vente reste simple : l'effort « low » répond plus vite.
       output_config: { effort: "low" },
