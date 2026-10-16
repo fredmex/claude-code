@@ -78,7 +78,7 @@ test("send_quote refusé sans confirmation explicite, puis envoyé après", asyn
   const claudeResponses = [
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { ...input, client_confirmed: false } }] },
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "send_quote", input: { ...input, client_confirmed: true } }] },
-    { stop_reason: "end_turn", content: [{ type: "text", text: "C'est envoyé! Quand souhaitez-vous l'installation?" }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "C'est envoyé! Voulez-vous aussi la fiche du 50 kW pour comparer?" }] },
   ];
   const claudeRequests: any[] = [];
   const backends = fakeBackends();

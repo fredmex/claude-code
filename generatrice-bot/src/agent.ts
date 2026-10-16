@@ -224,10 +224,12 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
           };
         }
         console.error("send_quote", error);
-        state.lead = { ...state.lead, notes: [state.lead.notes, `Échec d'envoi automatique de soumission (${model.name})`].filter(Boolean).join(" — ") };
+        const reason = error instanceof Error ? error.message.slice(0, 80) : "inconnue";
+        state.lead = { ...state.lead, notes: [state.lead.notes, `Échec d'envoi automatique de soumission (${model.name}) : ${reason}`].filter(Boolean).join(" — ") };
+        state.transferReason = `Envoi automatique de la soumission ${model.name} échoué (${reason}) : à envoyer par l'équipe`;
         return {
           isError: true,
-          content: "L'envoi a échoué pour une raison technique. Ne réessaie pas. Dis au client qu'un conseiller lui envoie la soumission officielle par courriel rapidement ; ses coordonnées sont enregistrées.",
+          content: "L'envoi a échoué pour une raison technique. Ne réessaie pas. Dis au client qu'un conseiller lui envoie la soumission officielle par courriel rapidement et lui répond ici ; ses coordonnées sont enregistrées.",
         };
       }
     }

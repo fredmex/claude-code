@@ -93,3 +93,19 @@ test("pas de soumission automatique pour le Kubota", async () => {
   await assert.rejects(sendOfficialQuote(quoteEnv, { ...request, model: findModel("kubota-40")! }, fetchImpl), /not_quotable/);
   assert.equal(calls.length, 0);
 });
+
+test("le registre des soumissions passe par la liaison de service quand elle existe", async () => {
+  const { calls, fetchImpl } = fakeBackends();
+  const viaBinding: string[] = [];
+  const env = { ...quoteEnv, QUOTE_REGISTER: { fetch: ((url: string, init: RequestInit) => { viaBinding.push(new URL(url).pathname); return fetchImpl(url, init); }) as unknown as typeof fetch } };
+  const result = await sendOfficialQuote(env, request, fetchImpl);
+  assert.equal(result.number, "S-2026-0042");
+  assert.deepEqual(viaBinding, ["/api/login", "/api/clients", "/api/quotes"]);
+  assert.ok(calls.some((c) => c.url === "https://api.resend.com/emails"));
+});
+
+test("le prompt interdit de planifier une installation", async () => {
+  const { systemPrompt } = await import("../src/business.ts");
+  assert.match(systemPrompt(), /Ne demande jamais de planifier/);
+  assert.doesNotMatch(systemPrompt(), /meilleur moment/);
+});

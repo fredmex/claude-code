@@ -8,6 +8,12 @@ export { ExistingContactError };
 
 export interface QuoteEnv extends HubSpotEnv {
   QUOTE_REGISTER_URL: string;
+  /**
+   * Liaison de service vers le Worker « solution-nrj-soumissions ». Obligatoire en
+   * production : Cloudflare refuse un fetch() public vers un autre Worker du même
+   * domaine workers.dev (erreur 1042).
+   */
+  QUOTE_REGISTER?: { fetch: typeof fetch };
   QUOTE_REGISTER_PASSWORD?: string;
   QUOTE_WRITES_ENABLED?: string;
   QUOTATION_EMAIL_ENABLED?: string;
@@ -63,7 +69,8 @@ export async function reserveQuoteNumber(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ id: number; number: string; revision: number }> {
   const base = env.QUOTE_REGISTER_URL.replace(/\/$/, "");
-  const login = await fetchImpl(`${base}/api/login`, {
+  const register: typeof fetch = env.QUOTE_REGISTER ? (input, init) => env.QUOTE_REGISTER!.fetch(input, init) : fetchImpl;
+  const login = await register(`${base}/api/login`, {
     method: "POST",
     headers: { Origin: base, "Content-Type": "application/json" },
     body: JSON.stringify({ password: env.QUOTE_REGISTER_PASSWORD }),
@@ -84,11 +91,11 @@ export async function reserveQuoteNumber(
     address: c.address ?? "",
     notes: req.contactId ? `Contact HubSpot ${req.contactId}` : "Client Messenger",
   };
-  const clientRes = await fetchImpl(`${base}/api/clients`, { method: "POST", headers, body: JSON.stringify(client), signal: AbortSignal.timeout(15000) });
+  const clientRes = await register(`${base}/api/clients`, { method: "POST", headers, body: JSON.stringify(client), signal: AbortSignal.timeout(15000) });
   if (!clientRes.ok) throw new Error(`quote_client_${clientRes.status}`);
 
   const m = req.model;
-  const quoteRes = await fetchImpl(`${base}/api/quotes`, {
+  const quoteRes = await register(`${base}/api/quotes`, {
     method: "POST",
     headers,
     signal: AbortSignal.timeout(15000),

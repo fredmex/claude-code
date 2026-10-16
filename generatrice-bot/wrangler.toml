@@ -25,6 +25,16 @@ QUOTE_WRITES_ENABLED = "true"
 HUBSPOT_WRITES_ENABLED = "true"
 QUOTATION_EMAIL_ENABLED = "true"
 
+# Appels vers l'application des soumissions (numéros S-AAAA-NNNN) : liaison directe,
+# car Cloudflare bloque un fetch public entre Workers du même domaine (erreur 1042).
+[[services]]
+binding = "QUOTE_REGISTER"
+service = "solution-nrj-soumissions"
+
+# Journaux consultables dans le tableau de bord Cloudflare (Workers → Logs).
+[observability]
+enabled = true
+
 # Mémoire des conversations du nouveau bot.
 [[kv_namespaces]]
 binding = "BOT_STATE"
