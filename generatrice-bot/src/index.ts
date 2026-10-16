@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { runAgent, type Turn } from "./agent.ts";
 import { emptyLead, leadsToCsv, listLeads, notifyTeam, putLead, type Lead } from "./leads.ts";
 import { AD_GREETING, customerGate, DAILY_REPLY_LIMIT, stopRequested, type GuardEnv } from "./guards.ts";
-import { BOT_METADATA, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
+import { BOT_METADATA, fetchProfileName, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
 
 export interface Env extends GuardEnv {
   BOT_STATE: KVNamespace;
@@ -205,8 +205,21 @@ async function resumeBot(request: Request, url: URL, env: Env): Promise<Response
 /** Retire pause, arrêt et compteur du jour ; avec reset, efface aussi l'historique et la fiche. */
 async function clearClientState(store: Store, reset: boolean): Promise<void> {
   const keys = ["pause", "stopped", `count:${new Date().toISOString().slice(0, 10)}`];
-  if (reset) keys.push("history", "lead");
+  if (reset) keys.push("history", "lead", "profile");
   await Promise.all(keys.map((k) => store.delete(k)));
+}
+
+/**
+ * Nom du profil Messenger, gardé dans l'état du client pour ne pas refaire l'appel
+ * à chaque message. Un échec est retenu une journée, puis on réessaie.
+ */
+async function profileNameFor(store: Store, token: string, psid: string): Promise<string | null> {
+  const cached = await store.get<{ name: string | null }>("profile");
+  if (cached) return cached.name;
+  const name = await fetchProfileName(token, psid);
+  await store.put("profile", { name }, name ? undefined : 60 * 60 * 24);
+  if (!name) console.log(`Nom du profil inconnu pour ${tail(psid)} : le bot le demandera au besoin`);
+  return name;
 }
 
 /** Les 4 derniers chiffres suffisent pour suivre un client dans les journaux. */
@@ -330,6 +343,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
   await sendAction(token, psid, "typing_on");
 
   const history = (await store.get<Turn[]>("history")) ?? [];
+  const profileName = await profileNameFor(store, token, psid);
   const now = new Date().toISOString();
 
   let result;
@@ -343,6 +357,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
       psid,
       now,
       quoteEnv: env,
+      profileName,
     });
   } catch (error) {
     logError(error);

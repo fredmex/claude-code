@@ -129,7 +129,8 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /si ce budget lui convient/);
   assert.doesNotMatch(systemPrompt(), /Chauffage électrique ou non/);
   assert.doesNotMatch(systemPrompt(), /plus compacte que la 60 kW/);
-  assert.match(systemPrompt(), /revenez simplement m'écrire avec votre nom, le nom de l'entreprise, l'adresse et le téléphone/);
+  assert.match(systemPrompt(), /revenez simplement m'écrire avec le nom de l'entreprise, l'adresse et le téléphone/);
+  assert.doesNotMatch(systemPrompt(), /avec votre nom/);
   assert.match(systemPrompt(), /n'insiste jamais pour le code postal/);
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
   assert.match(systemPrompt(), /continue avec CE modèle/);

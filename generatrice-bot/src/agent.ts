@@ -24,6 +24,8 @@ export interface AgentInput {
   psid: string;
   now: string;
   quoteEnv?: QuoteEnv;
+  // Nom du profil Messenger (null si inconnu) : le bot ne le demande pas.
+  profileName?: string | null;
   // Pour les tests : remplace les appels réseau (Claude, registre, Resend).
   fetch?: typeof fetch;
 }
@@ -82,7 +84,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
       type: "object",
       properties: {
         model_key: { type: "string", enum: QUOTABLE_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
-        full_name: { type: "string", description: "Nom complet du client." },
+        full_name: { type: "string", description: "Nom complet du client : celui qu'il a donné, sinon celui de son profil Messenger." },
         company: optionalText("Nom de l'entreprise si la soumission est au nom d'une entreprise ; vide si elle est à titre personnel."),
         email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
         phone: optionalText("Téléphone du client."),
@@ -178,8 +180,9 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
         return { isError: true, content: "Pas de soumission automatique pour ce modèle. Enregistre le client avec save_lead et dis-lui qu'un conseiller lui prépare la soumission." };
       }
       const email = String(args.email).trim().toLowerCase();
-      const fullName = String(args.full_name).trim();
-      if (!isEmail(email) || !fullName) return { isError: true, content: "Nom complet ou courriel invalide : redemande-les au client." };
+      // Le nom donné par le client d'abord, sinon celui de son profil Messenger.
+      const fullName = String(args.full_name ?? "").trim() || state.lead?.name || input.profileName || "";
+      if (!isEmail(email) || !fullName) return { isError: true, content: "Nom ou courriel manquant : demande-les au client." };
       const address = typeof args.address === "string" && args.address.trim() ? args.address.trim() : null;
       const quantity = Math.max(1, Math.min(20, Math.floor(Number(args.quantity) || 1)));
       const phone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
@@ -241,14 +244,15 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       const email = String(args.email).trim().toLowerCase();
       if (!isEmail(email)) return { isError: true, content: "Courriel invalide : redemande-le." };
       const specPhone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
-      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: (args.name as string) || null, company: (args.company as string) || null, phone: specPhone }, input.now);
+      const specName = (typeof args.name === "string" && args.name.trim()) || state.lead?.name || input.profileName || null;
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: specName, company: (args.company as string) || null, phone: specPhone }, input.now);
       if (!quoteEnv?.RESEND_API_KEY || quoteEnv.QUOTATION_EMAIL_ENABLED !== "true") {
         return { isError: true, content: `L'envoi de courriels n'est pas activé. Donne plutôt au client le lien de la fiche : ${model.url}` };
       }
       try {
-        await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: (args.name as string) || null, rows: descriptionRows(model, null) }, doFetch);
+        await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: specName, rows: descriptionRows(model, null) }, doFetch);
         // Contact HubSpot : une erreur ici n'empêche pas l'envoi déjà fait.
-        await recordSpecSheetContact(quoteEnv, { model, email, name: (args.name as string) || null, company: (args.company as string | null) || null, phone: specPhone }, doFetch).catch((error) =>
+        await recordSpecSheetContact(quoteEnv, { model, email, name: specName, company: (args.company as string | null) || null, phone: specPhone }, doFetch).catch((error) =>
           console.error("hubspot_fiche", error),
         );
         return { content: JSON.stringify({ sent: true, email }) };
@@ -284,7 +288,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     const response = await client.beta.messages.create({
       model: input.model,
       max_tokens: 2048,
-      system: systemPrompt(),
+      system: systemPrompt(input.profileName ?? null),
       tools: TOOLS,
       // Une conversation de vente reste simple : l'effort « low » répond plus vite.
       output_config: { effort: "low" },

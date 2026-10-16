@@ -103,6 +103,33 @@ export async function sendText(pageAccessToken: string, recipientId: string, tex
   }
 }
 
+/**
+ * Prénom et nom du client, tirés de son profil Messenger (API User Profile, jeton de Page).
+ * Renvoie null si l'appel échoue ou ne renvoie rien : le bot demandera alors le nom.
+ */
+export async function fetchProfileName(pageAccessToken: string, psid: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  try {
+    const res = await fetchImpl(`${GRAPH_API}/${encodeURIComponent(psid)}?fields=first_name,last_name`, {
+      headers: { Authorization: `Bearer ${pageAccessToken}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      console.error(`Profil Messenger indisponible (${res.status})`);
+      return null;
+    }
+    const profile = (await res.json()) as { first_name?: unknown; last_name?: unknown };
+    const name = [profile.first_name, profile.last_name]
+      .map((part) => (typeof part === "string" ? part.replace(/[\u0000-\u001f"«»<>\[\]{}]/g, " ").replace(/\s+/g, " ").trim() : ""))
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 80);
+    return name || null;
+  } catch {
+    console.error("Profil Messenger : appel échoué");
+    return null;
+  }
+}
+
 export async function sendAction(
   pageAccessToken: string,
   recipientId: string,
