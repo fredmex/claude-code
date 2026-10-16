@@ -30,7 +30,8 @@ export const BUSINESS_INFO = `
 ${catalogueForPrompt()}
 - Le moteur Perkins 500 kW n'est plus offert : ne le propose pas.
 
-Usages types (seulement si le client ne connaît pas sa puissance) : 10 à 30 kW pour une résidence ou des circuits essentiels ; 40 à 60 kW pour un petit commerce ou une ferme ; 80 à 100 kW pour un commerce, un bâtiment ou un chantier ; 150 kW et plus pour l'industrie. Les fermes prennent souvent de 40 à 100 kW.
+Usages types (seulement si le client ne connaît pas sa puissance) : 10 à 30 kW pour une résidence ou des circuits essentiels ; 40 à 60 kW pour un petit commerce ; 80 à 100 kW pour un commerce, un bâtiment ou un chantier ; 150 kW et plus pour l'industrie.
+Ferme : ne suggère aucune puissance ni fourchette. Si le client ne sait pas quoi choisir pour une ferme, propose qu'un conseiller l'aide à déterminer la puissance.
 
 Phases selon la tension : 120/240 V = monophasé ; 120/208 V, 347/600 V et 600 V = triphasé.
 
