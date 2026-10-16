@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Conversation, DurableStore, handleEvent, type Env, type Store } from "../src/index.ts";
+import { AD_GREETING } from "../src/guards.ts";
+import { BOT_METADATA } from "../src/messenger.ts";
 
 /** Stockage de Durable Object en mémoire (lecture immédiatement cohérente, comme le vrai). */
 function fakeStorage() {
@@ -88,4 +90,48 @@ test("expiration des données du Durable Object", async () => {
   assert.equal(await store.get("pause"), null);
   await store.put("history", [1, 2]);
   assert.deepEqual(await store.get("history"), [1, 2]);
+});
+
+// Ouverture au public : OWNER_ONLY à "false" (NEW_ONLY est vérifié dans guards.test.ts).
+const publicEnv = { ...env, MESSENGER_OWNER_ONLY: "false" } as unknown as Env;
+const CLIENT = "777000111";
+const clientMsg = (mid: string, text: string) => ({ sender: { id: CLIENT }, recipient: { id: "page" }, timestamp: Date.now(), message: { mid, text } });
+const pageEcho = (mid: string, text: string, metadata?: string) => ({
+  sender: { id: "page" },
+  recipient: { id: CLIENT },
+  timestamp: Date.now(),
+  message: { mid, text, is_echo: true, ...(metadata ? { metadata } : {}) },
+});
+
+test("ouvert au public : un client parle au bot, mais #reset n'est pas une commande pour lui", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await handleEvent(clientMsg("c1", "je veux une 40 kW"), publicEnv, store);
+    await store.put("lead", { psid: CLIENT });
+    await handleEvent(clientMsg("c2", "#reset"), publicEnv, store);
+    assert.equal(net.claudeRequests.length, 2); // #reset traité comme un message ordinaire
+    assert.deepEqual(await store.get("lead"), { psid: CLIENT }); // rien n'est effacé
+  } finally {
+    net.restore();
+  }
+});
+
+test("message d'accueil de la pub : pas de pause ; réponse d'un humain : pause du bot", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await handleEvent(pageEcho("e1", AD_GREETING), publicEnv, store);
+    await handleEvent(pageEcho("e2", "Réponse du bot", BOT_METADATA), publicEnv, store);
+    assert.equal(await store.get("pause"), null);
+    await handleEvent(clientMsg("c1", "je veux une 40 kW"), publicEnv, store);
+    assert.equal(net.claudeRequests.length, 1);
+
+    await handleEvent(pageEcho("e3", "Bonjour, ici Frederic de Solution NRJ"), publicEnv, store);
+    assert.equal(await store.get("pause"), "humain");
+    await handleEvent(clientMsg("c2", "merci"), publicEnv, store);
+    assert.equal(net.claudeRequests.length, 1); // le bot se tait
+  } finally {
+    net.restore();
+  }
 });
