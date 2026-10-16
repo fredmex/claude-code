@@ -124,6 +124,8 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /demande SEULEMENT son courriel pour lui envoyer la fiche/);
   assert.match(systemPrompt(), /ne demande pas l'usage/);
   assert.doesNotMatch(systemPrompt(), /électricien certifié/);
+  assert.match(systemPrompt(), /faq\/#maison-puissance/);
+  assert.match(systemPrompt(), /N'exige jamais le DMW/);
   assert.match(systemPrompt(), /revenez simplement m'écrire avec votre nom, le nom de l'entreprise, l'adresse et le téléphone/);
   assert.match(systemPrompt(), /n'insiste jamais pour le code postal/);
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
