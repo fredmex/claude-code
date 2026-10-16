@@ -1,0 +1,20 @@
+name = "messenger-bot"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+CLAUDE_MODEL = "claude-opus-5-5"
+
+# Mémoire des conversations. Créez l'espace avec :
+#   npx wrangler kv namespace create BOT_STATE
+# puis collez l'identifiant affiché ci-dessous.
+[[kv_namespaces]]
+binding = "BOT_STATE"
+id = "REMPLACEZ_PAR_L_ID_DU_NAMESPACE_KV"
+
+# Secrets (à ne jamais écrire dans ce fichier) :
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put META_APP_SECRET
+#   npx wrangler secret put META_PAGE_ACCESS_TOKEN
+#   npx wrangler secret put META_VERIFY_TOKEN
