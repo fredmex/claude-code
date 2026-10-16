@@ -215,7 +215,8 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   // Au-delà de 30 réponses dans la journée, on laisse la conversation à l'équipe.
   const countKey = `count:${psid}:${new Date().toISOString().slice(0, 10)}`;
   const count = Number((await env.BOT_STATE.get(countKey)) ?? 0);
-  if (count >= DAILY_REPLY_LIMIT) {
+  // Le compte de test de Frederic n'a pas de limite : elle protège les vrais clients.
+  if (count >= DAILY_REPLY_LIMIT && gate.reason !== "owner_test") {
     await env.BOT_STATE.put(`pause:${psid}`, "limite", { expirationTtl: pauseSeconds(env) });
     console.log(`Pause pour ${tail(psid)} : limite de ${DAILY_REPLY_LIMIT} réponses atteinte`);
     return;
