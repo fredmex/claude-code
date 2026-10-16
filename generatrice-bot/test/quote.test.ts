@@ -108,4 +108,5 @@ test("le prompt interdit de planifier une installation", async () => {
   const { systemPrompt } = await import("../src/business.ts");
   assert.match(systemPrompt(), /Ne demande jamais de planifier/);
   assert.doesNotMatch(systemPrompt(), /meilleur moment/);
+  assert.match(systemPrompt(), /même si un envoi précédent a échoué/);
 });

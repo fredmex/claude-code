@@ -107,7 +107,8 @@ async function exportLeads(request: Request, url: URL, env: Env): Promise<Respon
 
 /**
  * Relance le bot pour un client (retire pause, arrêt et compteur du jour) :
- * POST /admin/resume?psid=…  avec  Authorization: Bearer ADMIN_TOKEN.
+ * POST /admin/resume?psid=…[&reset=1]  avec  Authorization: Bearer ADMIN_TOKEN.
+ * reset=1 efface aussi l'historique de conversation et la fiche du client.
  * Sans psid : liste les clients en pause ou arrêtés.
  */
 async function resumeBot(request: Request, url: URL, env: Env): Promise<Response> {
@@ -119,13 +120,17 @@ async function resumeBot(request: Request, url: URL, env: Env): Promise<Response
     return Response.json({ paused: paused.keys.map((k) => k.name.slice(6)), stopped: stopped.keys.map((k) => k.name.slice(8)) });
   }
   if (request.method !== "POST" || !/^\d{5,30}$/.test(psid)) return new Response("Bad request", { status: 400 });
+  const reset = url.searchParams.get("reset") === "1";
+  await clearClientState(env, psid, reset);
+  return Response.json({ resumed: psid, reset });
+}
+
+/** Retire pause, arrêt et compteur du jour ; avec reset, efface aussi l'historique et la fiche. */
+async function clearClientState(env: Env, psid: string, reset: boolean): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
-  await Promise.all([
-    env.BOT_STATE.delete(`pause:${psid}`),
-    env.BOT_STATE.delete(`stopped:${psid}`),
-    env.BOT_STATE.delete(`count:${psid}:${today}`),
-  ]);
-  return Response.json({ resumed: psid });
+  const keys = [`pause:${psid}`, `stopped:${psid}`, `count:${psid}:${today}`];
+  if (reset) keys.push(`history:${psid}`, `lead:${psid}`);
+  await Promise.all(keys.map((k) => env.BOT_STATE.delete(k)));
 }
 
 /** Les 4 derniers chiffres suffisent pour suivre un client dans les journaux. */
@@ -178,6 +183,14 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   const gate = customerGate(env, psid, Number(event.timestamp));
   if (!gate.allowed) {
     console.log(`Pas de réponse à ${tail(psid)} : ${gate.reason}`);
+    return;
+  }
+
+  // Test : Frederic remet sa conversation à zéro en écrivant « #reset ».
+  if (gate.reason === "owner_test" && message?.text?.trim().toLowerCase() === "#reset") {
+    await clearClientState(env, psid, true);
+    await sendText(env.META_PAGE_ACCESS_TOKEN, psid, "Conversation de test remise à zéro (historique, fiche et pause effacés).");
+    console.log(`Remise à zéro du test pour ${tail(psid)}`);
     return;
   }
 
