@@ -71,12 +71,12 @@ Ensuite :
 1. Vérifier que `RESEND_API_KEY`, `HUBSPOT_ACCESS_TOKEN` et
    `QUOTE_REGISTER_PASSWORD` existent : `npx.cmd wrangler secret list`.
    Sinon, `npx.cmd wrangler secret put <NOM>`.
-2. Test par Frederic seul : mettre son PSID dans le secret
-   `MESSENGER_OWNER_TEST_PSID`, passer `MESSENGER_ENABLED` à `"true"` et
-   redéployer. Avec `MESSENGER_NEW_ONLY = "true"` et sans liste valide de
-   clients existants, seul Frederic reçoit des réponses.
-3. Ouverture aux nouveaux clients : renseigner `MESSENGER_EXISTING_BASELINE`
-   (liste des clients existants) et `MESSENGER_ACTIVATED_AT`, puis redéployer.
+2. Test par Frederic seul : `MESSENGER_ENABLED = "true"` et
+   `MESSENGER_OWNER_ONLY = "true"` (réglages actuels). Seul le compte du
+   secret `MESSENGER_OWNER_TEST_PSID` reçoit des réponses.
+3. Ouverture aux nouveaux clients : `MESSENGER_OWNER_ONLY = "false"`, puis
+   redéployer. Les clients de `MESSENGER_EXISTING_BASELINE` et les messages
+   antérieurs à `MESSENGER_ACTIVATED_AT` restent à l'équipe.
 4. Retour en arrière possible à tout moment : `npx.cmd wrangler rollback`.
 
 ## Guide pas à pas

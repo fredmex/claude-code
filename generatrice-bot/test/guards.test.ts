@@ -15,6 +15,9 @@ test("le bot ne répond qu'aux nouveaux clients, dans la fenêtre de 24 h", () =
   assert.equal(customerGate({ ...env, MESSENGER_ENABLED: "false" }, "555", now, now).allowed, false); // interrupteur
   assert.equal(customerGate({ ...env, MESSENGER_EXISTING_BASELINE: "" }, "555", now, now).allowed, false); // liste absente
   assert.equal(customerGate(env, "42", now, now).allowed, true); // test du propriétaire
+  const ownerOnly = { ...env, MESSENGER_OWNER_ONLY: "true" };
+  assert.equal(customerGate(ownerOnly, "42", now, now).allowed, true);
+  assert.equal(customerGate(ownerOnly, "555", now - 1000, now).allowed, false); // nouveau client, mais phase de test
 });
 
 test("demande d'arrêt", () => {

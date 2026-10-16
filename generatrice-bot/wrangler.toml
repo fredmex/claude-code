@@ -10,8 +10,11 @@ workers_dev = true
 [vars]
 CLAUDE_MODEL = "claude-opus-5-5"
 META_PAGE_ID = "108271818899977"
-# Interrupteur général : "true" pour que le bot réponde. Déployé éteint.
-MESSENGER_ENABLED = "false"
+# Interrupteur général : "true" pour que le bot réponde.
+MESSENGER_ENABLED = "true"
+# Phase de test : "true" = le bot ne répond qu'à Frederic (secret MESSENGER_OWNER_TEST_PSID).
+# Passer à "false" pour ouvrir le bot aux nouveaux clients.
+MESSENGER_OWNER_ONLY = "true"
 # Nouveaux clients seulement (liste MESSENGER_EXISTING_BASELINE + MESSENGER_ACTIVATED_AT, secrets).
 MESSENGER_NEW_ONLY = "true"
 # Pause du bot quand un humain prend la conversation.

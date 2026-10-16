@@ -10,6 +10,8 @@ export interface GuardEnv {
   MESSENGER_EXISTING_BASELINE?: string;
   /** Date ISO d'activation : seuls les messages reçus après comptent. */
   MESSENGER_ACTIVATED_AT?: string;
+  /** "true" : le bot ne répond qu'à MESSENGER_OWNER_TEST_PSID (phase de test). */
+  MESSENGER_OWNER_ONLY?: string;
   /** PSID de Frederic : toujours servi, pour tester le bot. */
   MESSENGER_OWNER_TEST_PSID?: string;
   META_PAGE_ID?: string;
@@ -38,6 +40,7 @@ export function customerGate(env: GuardEnv, psid: string, timestamp: number, now
     return { allowed: false, reason: "outside_response_window" };
   }
   if (env.MESSENGER_OWNER_TEST_PSID && psid === env.MESSENGER_OWNER_TEST_PSID) return { allowed: true, reason: "owner_test" };
+  if (env.MESSENGER_OWNER_ONLY === "true") return { allowed: false, reason: "owner_only_test_phase" };
   if (env.MESSENGER_NEW_ONLY !== "true") return { allowed: true };
 
   let baseline: { complete?: boolean; pageId?: string; capturedAtUTC?: string; excludedPsids?: unknown };
