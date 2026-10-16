@@ -7,6 +7,14 @@ compatibility_flags = ["nodejs_compat"]
 CLAUDE_MODEL = "claude-opus-5-5"
 # Durée de la pause du bot quand un humain prend la conversation.
 HUMAN_PAUSE_HOURS = "24"
+# Interrupteur général : "true" pour que le bot réponde.
+MESSENGER_ENABLED = "false"
+# Registre des soumissions (numéros S-AAAA-NNNN).
+QUOTE_REGISTER_URL = "https://solution-nrj-soumissions.monscorbu.workers.dev"
+# Mettre à "true" une fois RESEND_API_KEY et QUOTE_REGISTER_PASSWORD installés
+# et le domaine solutionnrj.com vérifié dans Resend.
+QUOTE_WRITES_ENABLED = "false"
+QUOTATION_EMAIL_ENABLED = "false"
 
 # Mémoire des conversations. Créez l'espace avec :
 #   npx wrangler kv namespace create BOT_STATE
@@ -17,9 +25,10 @@ id = "REMPLACEZ_PAR_L_ID_DU_NAMESPACE_KV"
 
 # Secrets (jamais dans ce fichier) — voir le README, étape 5 :
 #   npx wrangler secret put ANTHROPIC_API_KEY
-#   npx wrangler secret put META_APP_ID
 #   npx wrangler secret put META_APP_SECRET
 #   npx wrangler secret put META_PAGE_ACCESS_TOKEN
 #   npx wrangler secret put META_VERIFY_TOKEN
 #   npx wrangler secret put ADMIN_TOKEN
+#   npx wrangler secret put RESEND_API_KEY
+#   npx wrangler secret put QUOTE_REGISTER_PASSWORD
 #   npx wrangler secret put NOTIFY_WEBHOOK_URL   (facultatif)

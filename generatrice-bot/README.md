@@ -1,5 +1,8 @@
 # Bot Messenger — Solution NRJ (generatricediesel.com)
 
+> Remplace l'ancien bot ChatGPT (Worker `solution-nrj-messenger`, jamais activé) :
+> la conversation passe par Claude ; la soumission PDF suit le format approuvé du PRD.
+
 Un conseiller virtuel pour la Messenger de votre Page Facebook. Il discute
 vraiment avec le client grâce à Claude (aucune réponse toute faite), répond aux
 questions sur vos génératrices avec les prix et règles de votre PRD, qualifie le
@@ -8,9 +11,22 @@ client le demande.
 
 ## Ce que fait le bot
 
-- **Conversation naturelle en français**, une question à la fois, avec le lien
-  de la fiche du modèle dont il parle.
-- **Infos fiables** : il s'appuie sur `src/business.ts`, repris du PRD (16
+- **Conseiller technique** humain, chaleureux et direct, en français. Chaque
+  réponse se termine par une seule question de qualification, jamais par
+  « Comment puis-je vous aider ? ». S'il manque une spécification, il le dit
+  et propose de faire valider par l'équipe technique.
+- **Soumission officielle en PDF par courriel** : il recueille nom, courriel,
+  téléphone, tension, boîtier et quantité, récapitule, attend le « oui » du
+  client, puis réserve le numéro `S-AAAA-NNNN` dans l'application
+  `solution-nrj-soumissions`, génère le PDF au format du PRD (une page,
+  2 colonnes, total sur bande bleu foncé, dépôt de 30 % sur bande orange) et
+  l'envoie avec Resend depuis ventes@solutionnrj.com, avec copie à ventes@.
+- **Fiche détaillée par courriel** sur demande.
+- **Garde-fous de l'ancien bot** : interrupteur `MESSENGER_ENABLED`, nouveaux
+  clients seulement (`MESSENGER_NEW_ONLY` + liste des clients existants),
+  arrêt si le client écrit « stop » ou « non merci », 30 réponses par jour au
+  plus, fenêtre de 24 h de Messenger, message d'accueil publicitaire ignoré.
+- **Infos fiables** : prix et modèles dans `src/catalogue.ts`, règles dans `src/business.ts`, repris du PRD (16
   modèles, prix avant taxes, garantie, filtres, règles). Il ne parle jamais du
   transport ni des inverseurs, ne mentionne jamais Cummins, et renvoie à l'équipe
   tout ce qui est « à confirmer ». Les coûts fournisseur n'y sont pas.
@@ -124,6 +140,20 @@ npx wrangler secret put ADMIN_TOKEN
 
 Pour `ADMIN_TOKEN`, inventez un long mot de passe : il protège la liste de vos
 prospects.
+
+Pour les soumissions PDF par courriel :
+
+```bash
+npx wrangler secret put RESEND_API_KEY            # resend.com, domaine solutionnrj.com vérifié
+npx wrangler secret put QUOTE_REGISTER_PASSWORD   # mot de passe de solution-nrj-soumissions
+```
+
+Puis, dans `wrangler.toml`, passez `QUOTE_WRITES_ENABLED` et
+`QUOTATION_EMAIL_ENABLED` à `"true"`. Tant qu'ils valent `"false"`, le bot
+recueille la demande et un conseiller envoie la soumission.
+
+Enfin, mettez `MESSENGER_ENABLED = "true"` quand vous êtes prêt : tant qu'il
+n'est pas à `"true"`, le bot reçoit les messages mais ne répond à personne.
 
 Facultatif, pour être alerté (Slack : *Applications → Incoming Webhooks* ;
 Discord : *Paramètres du salon → Intégrations → Webhooks*) :
@@ -246,7 +276,9 @@ bot peut répéter tout ce qui s'y trouve.
 
 | Réglage | Où |
 |---|---|
-| Infos, prix, règles de réponse | `src/business.ts` |
+| Prix et caractéristiques des modèles | `src/catalogue.ts` |
+| Règles de réponse, infos de l'entreprise | `src/business.ts` |
+| Gabarit de la soumission PDF | `src/quote-pdf.ts` |
 | Durée de la pause après un humain (heures) | `wrangler.toml` → `HUMAN_PAUSE_HOURS` |
 | Modèle Claude | `wrangler.toml` → `CLAUDE_MODEL` (par défaut `claude-opus-5-5`) |
 | Questions de qualification, outils | `src/agent.ts` |

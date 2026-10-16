@@ -19,14 +19,17 @@ export interface MessagingEvent {
     text?: string;
     // Vrai pour les messages envoyés PAR la Page (par le bot ou par un humain).
     is_echo?: boolean;
-    // Sur un écho : l'application qui a envoyé le message. Absent quand un
-    // humain a répondu depuis la boîte de réception Meta Business Suite.
-    app_id?: number;
+    // Sur un écho : la balise passée à l'envoi. Les messages du bot portent
+    // BOT_METADATA ; un message sans balise vient d'un humain.
+    metadata?: string;
     attachments?: Attachment[];
     quick_reply?: { payload: string };
   };
   postback?: { title: string; payload: string };
 }
+
+/** Balise ajoutée à chaque message du bot, pour reconnaître ceux d'un humain. */
+export const BOT_METADATA = "solution-nrj-ai";
 
 export interface WebhookBody {
   object: string;
@@ -95,7 +98,7 @@ export async function sendText(pageAccessToken: string, recipientId: string, tex
     await callSendApi(pageAccessToken, {
       recipient: { id: recipientId },
       messaging_type: "RESPONSE",
-      message: { text: part },
+      message: { text: part, metadata: BOT_METADATA },
     });
   }
 }

@@ -119,17 +119,46 @@ export function describeLead(lead: Lead): string {
     .join("\n");
 }
 
+export interface NotifyConfig {
+  webhookUrl?: string;
+  resendApiKey?: string;
+  emailEnabled?: boolean;
+}
+
 /**
- * Prévient l'équipe par un webhook entrant (Slack, Discord, Google Chat, Make, Zapier…).
- * Le corps contient `text` (Slack, Google Chat), `content` (Discord) et la fiche complète.
+ * Prévient l'équipe : par courriel à ventes@solutionnrj.com (Resend) et, si configuré,
+ * par un webhook entrant (Slack, Discord, Google Chat, Make, Zapier…).
  */
-export async function notifyTeam(webhookUrl: string | undefined, title: string, lead: Lead): Promise<void> {
-  if (!webhookUrl) return;
+export async function notifyTeam(config: NotifyConfig, title: string, lead: Lead, idempotencyKey: string): Promise<void> {
   const text = `${title}\n${describeLead(lead)}`;
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, content: text.slice(0, 2000), lead }),
-  });
-  if (!res.ok) console.error(`Notification de l'équipe échouée (${res.status})`);
+  const jobs: Promise<void>[] = [];
+  if (config.resendApiKey && config.emailEnabled) {
+    jobs.push(
+      fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.resendApiKey}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({
+          from: "Solution NRJ <ventes@solutionnrj.com>",
+          to: ["ventes@solutionnrj.com"],
+          ...(lead.email ? { reply_to: lead.email } : {}),
+          subject: `Messenger — ${title.replace(/^\S+\s/, "")}`,
+          text: `${text}\n\nRépondez au client dans Meta Business Suite (boîte de réception Messenger).`,
+        }),
+      }).then((res) => {
+        if (!res.ok) console.error(`Courriel à l'équipe échoué (${res.status})`);
+      }),
+    );
+  }
+  if (config.webhookUrl) {
+    jobs.push(
+      fetch(config.webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, content: text.slice(0, 2000), lead }),
+      }).then((res) => {
+        if (!res.ok) console.error(`Webhook de l'équipe échoué (${res.status})`);
+      }),
+    );
+  }
+  await Promise.all(jobs);
 }

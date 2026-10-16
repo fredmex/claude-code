@@ -1,0 +1,213 @@
+// Soumission officielle : numéro réservé dans l'application « solution-nrj-soumissions »,
+// PDF au format approuvé, envoi par Resend depuis ventes@solutionnrj.com.
+import type { Model } from "./catalogue.ts";
+import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type QuoteClient } from "./quote-pdf.ts";
+
+export interface QuoteEnv {
+  QUOTE_REGISTER_URL: string;
+  QUOTE_REGISTER_PASSWORD?: string;
+  QUOTE_WRITES_ENABLED?: string;
+  QUOTATION_EMAIL_ENABLED?: string;
+  RESEND_API_KEY?: string;
+}
+
+export interface QuoteRequest {
+  psid: string;
+  model: Model;
+  client: QuoteClient & { email: string };
+  quantity: number;
+  voltage: string | null;
+  issuedOn: string;
+}
+
+export interface QuoteResult {
+  number: string;
+  revision: number;
+  emailId: string;
+  total: number;
+  deposit: number;
+}
+
+// Signature courriel approuvée (reprise du service Messenger existant).
+export const SIGNATURE_HTML =
+  '<table lang="fr-CA" dir="ltr" role="presentation" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;color:#263e55;max-width:320px;width:100%;"><tr><td style="padding-top:20px;padding-bottom:8px;"><a href="https://generatricediesel.com/"><img src="https://247524614.fs1.hubspotusercontent-na2.net/hubfs/247524614/2-Photo-2.jpg" alt="Solution NRJ — Generatricediesel.com — 438-350-6979" width="300" style="display:block;width:300px;max-width:100%;height:auto;border:0;"></a></td></tr><tr><td style="font-family:Arial,sans-serif;font-size:12px;line-height:18px;"><strong>Solution NRJ</strong><br><a href="https://generatricediesel.com/" style="color:#07599b;">generatricediesel.com</a><br><a href="tel:+14383506979" style="color:#263e55;text-decoration:none;">438-350-6979</a><br><a href="mailto:ventes@solutionnrj.com" style="color:#07599b;">ventes@solutionnrj.com</a></td></tr></table>';
+
+const FROM = "Solution NRJ <ventes@solutionnrj.com>";
+const TEAM = "ventes@solutionnrj.com";
+
+export const isEmail = (s: string) => s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+export function quoteSendingEnabled(env: QuoteEnv): boolean {
+  return (
+    env.QUOTATION_EMAIL_ENABLED === "true" &&
+    env.QUOTE_WRITES_ENABLED === "true" &&
+    Boolean(env.RESEND_API_KEY) &&
+    Boolean(env.QUOTE_REGISTER_PASSWORD)
+  );
+}
+
+/** Réserve un numéro S-AAAA-NNNN. Le même requestId renvoie toujours le même numéro. */
+export async function reserveQuoteNumber(
+  env: QuoteEnv,
+  req: QuoteRequest,
+  requestId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ id: number; number: string; revision: number }> {
+  const base = env.QUOTE_REGISTER_URL.replace(/\/$/, "");
+  const login = await fetchImpl(`${base}/api/login`, {
+    method: "POST",
+    headers: { Origin: base, "Content-Type": "application/json" },
+    body: JSON.stringify({ password: env.QUOTE_REGISTER_PASSWORD }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!login.ok) throw new Error(`quote_login_${login.status}`);
+  const cookie = login.headers.get("set-cookie");
+  if (!cookie?.startsWith("nrj_session=")) throw new Error("quote_cookie_missing");
+  const headers = { Cookie: cookie.split(";")[0], Origin: base, "Content-Type": "application/json" };
+
+  const c = req.client;
+  const client = {
+    id: `messenger-${req.psid}`,
+    name: c.fullName,
+    company: c.company ?? "",
+    email: c.email,
+    phone: c.phone ?? "",
+    address: c.address ?? "",
+    notes: "Client Messenger (bot Claude)",
+  };
+  const clientRes = await fetchImpl(`${base}/api/clients`, { method: "POST", headers, body: JSON.stringify(client), signal: AbortSignal.timeout(15000) });
+  if (!clientRes.ok) throw new Error(`quote_client_${clientRes.status}`);
+
+  const m = req.model;
+  const quoteRes = await fetchImpl(`${base}/api/quotes`, {
+    method: "POST",
+    headers,
+    signal: AbortSignal.timeout(15000),
+    body: JSON.stringify({
+      client,
+      clientId: client.id,
+      requestId,
+      title: `Génératrice diesel ${m.brand} ${m.powerKw} kW`,
+      date: req.issuedOn,
+      validUntil: addMonths(req.issuedOn),
+      status: "Envoyée",
+      followup: "",
+      lines: [{ description: `Génératrice diesel ${m.brand} ${m.powerKw} kW`, qty: req.quantity, price: String(m.priceCad) }],
+      conditions: "Installation, disponibilité et délai à confirmer.\nMême prix selon la tension.\nAucun retour une fois la commande confirmée.",
+      notes: `Envoyée par le bot Messenger. Tension demandée : ${req.voltage ?? "non précisée"}.`,
+    }),
+  });
+  if (!quoteRes.ok) throw new Error(`quote_create_${quoteRes.status}`);
+  const quote = (await quoteRes.json()) as { id: number; number: string; revision: number };
+  if (!/^S-\d{4}-\d{4,}$/.test(quote.number ?? "")) throw new Error("quote_number_missing");
+  return quote;
+}
+
+async function sendEmail(env: QuoteEnv, payload: object, idempotencyKey: string, fetchImpl: typeof fetch): Promise<string> {
+  const res = await fetchImpl("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`email_${res.status}`);
+  const body = (await res.json()) as { id?: string };
+  if (!body.id) throw new Error("email_acceptance_unconfirmed");
+  return body.id;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(s);
+}
+
+const html = (lines: string[]) =>
+  '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#172b42">' +
+  lines.map((l) => escapeHtml(l)).join("<br>") +
+  "<br>" +
+  SIGNATURE_HTML +
+  "</div>";
+
+export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResult> {
+  if (req.model.priceCad === null) throw new Error("price_on_request");
+  if (!isEmail(req.client.email) || !req.client.fullName.trim()) throw new Error("client_identity_required");
+
+  const requestId = `messenger-${req.psid}-${req.model.key}-${req.quantity}`;
+  const quote = await reserveQuoteNumber(env, req, requestId, fetchImpl);
+  const validUntil = addMonths(req.issuedOn);
+  const pdf = await buildQuotePdf({
+    number: quote.number,
+    revision: quote.revision || 1,
+    issuedOn: req.issuedOn,
+    validUntil,
+    client: req.client,
+    model: req.model,
+    quantity: req.quantity,
+    voltage: req.voltage,
+  });
+  const totals = computeTotals(req.model.priceCad, req.quantity);
+  const title = `Génératrice diesel ${req.model.brand} ${req.model.powerKw} kW`;
+  const lines = [
+    `Bonjour ${req.client.fullName},`,
+    "",
+    `Merci de votre intérêt. Vous trouverez ci-joint votre soumission ${quote.number} pour une ${title.toLowerCase()}.`,
+    "",
+    `Total : ${formatMoney(totals.total)} taxes incluses (dépôt requis : ${formatMoney(totals.deposit)}).`,
+    "La soumission est valide 3 mois. L'installation, la disponibilité et le délai sont à confirmer avec notre équipe.",
+    "",
+    `Fiche et photos du modèle : ${req.model.url}`,
+    "",
+    "Pour accepter, signez la soumission et retournez-la par courriel. Pour toute question, répondez simplement à ce message.",
+  ];
+  const emailId = await sendEmail(
+    env,
+    {
+      from: FROM,
+      to: [req.client.email],
+      bcc: [TEAM],
+      reply_to: TEAM,
+      subject: `Soumission ${quote.number} — ${title}`,
+      text: lines.join("\n") + `\n\nSolution NRJ\nhttps://${SUPPLIER.web}\n${SUPPLIER.phone}`,
+      html: html(lines),
+      attachments: [{ filename: `${quote.number}.pdf`, content: toBase64(pdf) }],
+    },
+    `messenger-quote-${quote.number}-R${quote.revision || 1}`,
+    fetchImpl,
+  );
+  return { number: quote.number, revision: quote.revision || 1, emailId, total: totals.total, deposit: totals.deposit };
+}
+
+/** Fiche détaillée par courriel (sans numéro de soumission). */
+export async function sendSpecSheet(
+  env: QuoteEnv,
+  args: { psid: string; model: Model; email: string; name: string | null; rows: [string, string][] },
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  if (!isEmail(args.email)) throw new Error("invalid_email");
+  const m = args.model;
+  const title = `Génératrice diesel ${m.brand} ${m.powerKw} kW`;
+  const lines = [
+    `Bonjour${args.name ? ` ${args.name}` : ""},`,
+    "",
+    `Voici la fiche de la ${title.toLowerCase()} :`,
+    "",
+    ...args.rows.map(([k, v]) => `${k} : ${v}`),
+    m.dimensions ? `Dimensions : ${m.dimensions}` : "",
+    "Garantie : 1 an ou 1 500 heures, selon la première limite atteinte.",
+    m.priceCad !== null ? `Prix : ${formatMoney(m.priceCad)} avant taxes.` : "Prix : sur demande.",
+    "",
+    `Photos et détails : ${m.url}`,
+    "",
+    "Pour une soumission officielle, répondez à ce courriel ou écrivez-nous sur Messenger.",
+  ].filter((l, i, a) => l !== "" || a[i - 1] !== "");
+  return sendEmail(
+    env,
+    { from: FROM, to: [args.email], reply_to: TEAM, subject: `Fiche — ${title}`, text: lines.join("\n"), html: html(lines) },
+    `messenger-fiche-${args.psid}-${m.key}`,
+    fetchImpl,
+  );
+}

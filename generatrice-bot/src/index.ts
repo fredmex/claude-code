@@ -1,12 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runAgent, type Turn } from "./agent.ts";
 import { emptyLead, getLead, leadsToCsv, listLeads, notifyTeam, putLead } from "./leads.ts";
-import { sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
+import { AD_GREETING, customerGate, DAILY_REPLY_LIMIT, stopRequested, type GuardEnv } from "./guards.ts";
+import { BOT_METADATA, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
 
-export interface Env {
+export interface Env extends GuardEnv {
   BOT_STATE: KVNamespace;
   ANTHROPIC_API_KEY: string;
-  META_APP_ID: string;
   META_APP_SECRET: string;
   META_PAGE_ACCESS_TOKEN: string;
   META_VERIFY_TOKEN: string;
@@ -14,6 +14,12 @@ export interface Env {
   CLAUDE_MODEL: string;
   HUMAN_PAUSE_HOURS: string;
   NOTIFY_WEBHOOK_URL?: string;
+  // Soumissions officielles (voir README).
+  QUOTE_REGISTER_URL: string;
+  QUOTE_REGISTER_PASSWORD?: string;
+  QUOTE_WRITES_ENABLED?: string;
+  QUOTATION_EMAIL_ENABLED?: string;
+  RESEND_API_KEY?: string;
 }
 
 // Nombre de messages gardés par conversation, et durée de cette mémoire.
@@ -50,7 +56,10 @@ export default {
     if (body.object !== "page") return new Response("Not found", { status: 404 });
 
     // Meta attend un 200 rapidement, sinon il renvoie l'événement : on traite en arrière-plan.
-    const events = (body.entry ?? []).flatMap((entry) => entry.messaging ?? []);
+    // Seulement la Page Solution NRJ, si son identifiant est configuré.
+    const events = (body.entry ?? [])
+      .filter((entry) => !env.META_PAGE_ID || String(entry.id) === env.META_PAGE_ID)
+      .flatMap((entry) => entry.messaging ?? []);
     ctx.waitUntil(Promise.all(events.map((event) => handleEvent(event, env).catch(logError))));
     return new Response("EVENT_RECEIVED", { status: 200 });
   },
@@ -90,10 +99,11 @@ function pauseSeconds(env: Env): number {
 async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   const message = event.message;
 
-  // Un message envoyé par la Page sans passer par notre application, c'est un
-  // humain qui répond depuis Meta Business Suite : le bot se met en pause.
+  // Un message envoyé par la Page sans la balise du bot, c'est un humain qui
+  // répond depuis Meta Business Suite : le bot se met en pause pour ce client.
+  // Le message d'accueil des publicités Messenger est envoyé par Meta : il ne compte pas.
   if (message?.is_echo) {
-    if (String(message.app_id ?? "") !== env.META_APP_ID) {
+    if (!String(message.metadata ?? "").startsWith(BOT_METADATA) && message.text !== AD_GREETING) {
       await env.BOT_STATE.put(`pause:${event.recipient.id}`, "humain", { expirationTtl: pauseSeconds(env) });
     }
     return;
@@ -111,8 +121,31 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
     return;
   }
 
+  // Le bot n'est pas activé, le client est un client existant, ou la fenêtre de 24 h est passée.
+  const gate = customerGate(env, psid, Number(event.timestamp));
+  if (!gate.allowed) {
+    console.log(`Pas de réponse à ${psid} : ${gate.reason}`);
+    return;
+  }
+
+  // Le client a demandé qu'on ne le contacte plus.
+  if (await env.BOT_STATE.get(`stopped:${psid}`)) return;
+  if (message?.text && stopRequested(message.text)) {
+    await env.BOT_STATE.put(`stopped:${psid}`, "1", { expirationTtl: 60 * 60 * 24 * 365 });
+    return;
+  }
+
   // Un membre de l'équipe a la main : le bot ne répond pas.
   if (await env.BOT_STATE.get(`pause:${psid}`)) return;
+
+  // Au-delà de 30 réponses dans la journée, on laisse la conversation à l'équipe.
+  const countKey = `count:${psid}:${new Date().toISOString().slice(0, 10)}`;
+  const count = Number((await env.BOT_STATE.get(countKey)) ?? 0);
+  if (count >= DAILY_REPLY_LIMIT) {
+    await env.BOT_STATE.put(`pause:${psid}`, "limite", { expirationTtl: pauseSeconds(env) });
+    return;
+  }
+  await env.BOT_STATE.put(countKey, String(count + 1), { expirationTtl: 60 * 60 * 48 });
 
   // Ce que le client a envoyé, pour Claude et pour l'historique.
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
@@ -157,6 +190,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
       lead: await getLead(env.BOT_STATE, psid),
       psid,
       now,
+      quoteEnv: env,
     });
   } catch (error) {
     logError(error);
@@ -178,14 +212,14 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   }
   if (lead) await putLead(env.BOT_STATE, lead);
 
+  const notify = { webhookUrl: env.NOTIFY_WEBHOOK_URL, resendApiKey: env.RESEND_API_KEY, emailEnabled: env.QUOTATION_EMAIL_ENABLED === "true" };
+  const lastMid = message?.mid ?? `postback-${event.timestamp}`;
   if (result.transferReason && lead) {
-    await notifyTeam(
-      env.NOTIFY_WEBHOOK_URL,
-      `🙋 Un client demande un humain sur Messenger (${result.transferReason}). Répondez-lui dans Meta Business Suite.`,
-      lead,
-    );
+    await notifyTeam(notify, `🙋 Un client demande un humain (${result.transferReason})`, lead, `messenger-transfer-${lastMid}`);
+  } else if (result.quote && lead) {
+    await notifyTeam(notify, `📄 Soumission ${result.quote.number} envoyée à ${result.quote.email}`, lead, `messenger-quote-notice-${result.quote.number}`);
   } else if (result.leadQualified && lead) {
-    await notifyTeam(env.NOTIFY_WEBHOOK_URL, "📞 Nouveau prospect Messenger à rappeler", lead);
+    await notifyTeam(notify, "📞 Nouveau prospect Messenger à rappeler", lead, `messenger-lead-${lastMid}`);
   }
 
   // On garde les derniers échanges (texte seulement), en commençant toujours par un message du client.

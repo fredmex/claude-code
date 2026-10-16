@@ -1,9 +1,13 @@
 // La conversation avec Claude : un tour de parole du client → une réponse,
-// avec les outils pour enregistrer le prospect et transférer à un humain.
+// avec les outils pour enregistrer le prospect, envoyer fiche et soumission,
+// et transférer à un humain.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { systemPrompt } from "./business.ts";
+import { findModel, MODEL_KEYS } from "./catalogue.ts";
 import { emptyLead, mergeLead, missingFields, normalizePhone, type Lead, type LeadUpdate } from "./leads.ts";
+import { descriptionRows, formatMoney } from "./quote-pdf.ts";
+import { isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
 
 /** Historique conservé entre deux messages : uniquement le texte échangé. */
 export interface Turn {
@@ -19,7 +23,8 @@ export interface AgentInput {
   lead: Lead | null;
   psid: string;
   now: string;
-  // Pour les tests : remplace l'appel réseau à l'API Claude.
+  quoteEnv?: QuoteEnv;
+  // Pour les tests : remplace les appels réseau (Claude, registre, Resend).
   fetch?: typeof fetch;
 }
 
@@ -29,12 +34,13 @@ export interface AgentResult {
   // Vrai si cette réponse a rendu la fiche complète (téléphone ou courriel obtenu).
   leadQualified: boolean;
   transferReason: string | null;
+  quote: (QuoteResult & { modelName: string; email: string }) | null;
 }
 
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 6;
 
 const REFUSAL_REPLY =
-  "Désolé, je ne peux pas répondre à ça. Je peux vous mettre en contact avec un membre de l'équipe si vous le souhaitez.";
+  "Désolé, je ne peux pas répondre à ça. Voulez-vous qu'un membre de notre équipe vous contacte directement?";
 
 const nullable = (type: string, description: string) => ({ type: [type, "null"], description });
 
@@ -55,10 +61,47 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         voltage: nullable("string", "Tension et phases, ex. « 120/240 V monophasé », « 600 V triphasé »."),
         enclosure: nullable("string", "« fermé insonorisé » ou « ouvert »."),
         phone: nullable("string", "Numéro de téléphone donné par le client, tel quel."),
-        email: nullable("string", "Courriel, si le client préfère être joint ainsi."),
+        email: nullable("string", "Courriel du client."),
         notes: nullable("string", "Autres détails utiles pour le conseiller : modèle qui l'intéresse, équipements à alimenter, autonomie souhaitée, secours ou principal, échéance…"),
       },
       required: ["name", "company", "usage", "power_kw", "city", "voltage", "enclosure", "phone", "email", "notes"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "send_quote",
+    description:
+      "Génère la soumission officielle en PDF (numéro S-AAAA-NNNN) et l'envoie par courriel au client, avec copie à l'équipe. À appeler UNIQUEMENT après avoir récapitulé la soumission au client et obtenu son accord explicite. Ne fonctionne que pour un modèle du catalogue avec un prix.",
+    strict: true,
+    input_schema: {
+      type: "object",
+      properties: {
+        model_key: { type: "string", enum: MODEL_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
+        full_name: { type: "string", description: "Nom complet du client." },
+        company: nullable("string", "Entreprise, s'il y a lieu."),
+        email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
+        phone: nullable("string", "Téléphone du client."),
+        address: nullable("string", "Adresse de facturation, si le client l'a donnée."),
+        voltage: nullable("string", "Tension demandée, ex. « 120/240 V » ou « 600 V » ; null pour celle du catalogue."),
+        quantity: { type: "integer", description: "Nombre d'unités (1 par défaut)." },
+        client_confirmed: { type: "boolean", description: "true seulement si le client vient de confirmer explicitement le récapitulatif." },
+      },
+      required: ["model_key", "full_name", "company", "email", "phone", "address", "voltage", "quantity", "client_confirmed"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "email_spec_sheet",
+    description: "Envoie par courriel la fiche détaillée d'un modèle (caractéristiques, prix avant taxes, lien photos). Aucun numéro de soumission.",
+    strict: true,
+    input_schema: {
+      type: "object",
+      properties: {
+        model_key: { type: "string", enum: MODEL_KEYS, description: "Clé du modèle." },
+        email: { type: "string", description: "Courriel du client." },
+        name: nullable("string", "Prénom ou nom du client."),
+      },
+      required: ["model_key", "email", "name"],
       additionalProperties: false,
     },
   },
@@ -78,6 +121,139 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
 ];
 
+interface ToolState {
+  lead: Lead | null;
+  transferReason: string | null;
+  quote: AgentResult["quote"];
+}
+
+type ToolOutcome = { content: string; isError?: boolean };
+
+async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInput, state: ToolState): Promise<ToolOutcome> {
+  const args = toolUse.input as Record<string, unknown>;
+  const quoteEnv = input.quoteEnv;
+  const doFetch = input.fetch ?? fetch;
+
+  switch (toolUse.name) {
+    case "save_lead": {
+      const update = args as LeadUpdate;
+      if (update.phone) {
+        const phone = normalizePhone(update.phone);
+        if (!phone) {
+          return {
+            isError: true,
+            content: `« ${update.phone} » ne ressemble pas à un numéro de téléphone. Rien n'a été enregistré : redemande poliment le numéro, puis rappelle save_lead.`,
+          };
+        }
+        update.phone = phone;
+      }
+      if (update.email && !isEmail(update.email)) {
+        return { isError: true, content: `« ${update.email} » n'est pas un courriel valide. Rien n'a été enregistré : redemande-le.` };
+      }
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), update, input.now);
+      const l = state.lead;
+      return {
+        content: JSON.stringify({
+          saved: true,
+          lead: { name: l.name, company: l.company, usage: l.usage, power_kw: l.power_kw, city: l.city, voltage: l.voltage, enclosure: l.enclosure, phone: l.phone, email: l.email },
+          missing: missingFields(l),
+        }),
+      };
+    }
+
+    case "send_quote": {
+      const model = findModel(String(args.model_key));
+      if (!model) return { isError: true, content: "Modèle inconnu." };
+      if (args.client_confirmed !== true) {
+        return { isError: true, content: "Le client n'a pas confirmé. Récapitule la soumission et attends son accord explicite avant de rappeler send_quote." };
+      }
+      if (model.priceCad === null) {
+        return { isError: true, content: "Ce modèle est « sur demande » : pas de soumission automatique. Enregistre le client avec save_lead et dis-lui qu'un conseiller lui prépare la soumission." };
+      }
+      const email = String(args.email).trim().toLowerCase();
+      const fullName = String(args.full_name).trim();
+      if (!isEmail(email) || !fullName) return { isError: true, content: "Nom complet ou courriel invalide : redemande-les au client." };
+      const quantity = Math.max(1, Math.min(20, Math.floor(Number(args.quantity) || 1)));
+      const phone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { name: fullName, email, phone, company: args.company as string | null }, input.now);
+
+      if (!quoteEnv || !quoteSendingEnabled(quoteEnv)) {
+        state.lead = { ...state.lead, notes: [state.lead.notes, `Soumission demandée : ${model.name} × ${quantity} (envoi automatique désactivé)`].filter(Boolean).join(" — ") };
+        return {
+          isError: true,
+          content: "L'envoi automatique des soumissions n'est pas activé. Dis au client qu'un conseiller lui envoie la soumission officielle par courriel dès que possible (lundi au vendredi, 9 h à 16 h). Ses coordonnées sont enregistrées.",
+        };
+      }
+      try {
+        const result = await sendOfficialQuote(
+          quoteEnv,
+          {
+            psid: input.psid,
+            model,
+            quantity,
+            voltage: typeof args.voltage === "string" ? args.voltage : null,
+            issuedOn: input.now.slice(0, 10),
+            client: {
+              fullName,
+              company: (args.company as string | null) || null,
+              email,
+              phone,
+              address: (args.address as string | null) || null,
+            },
+          },
+          doFetch,
+        );
+        state.quote = { ...result, modelName: model.name, email };
+        state.lead = { ...state.lead, notes: [state.lead.notes, `Soumission ${result.number} envoyée (${model.name} × ${quantity})`].filter(Boolean).join(" — ") };
+        return {
+          content: JSON.stringify({
+            sent: true,
+            number: result.number,
+            total_taxes_incluses: formatMoney(result.total),
+            depot_requis: formatMoney(result.deposit),
+            email,
+            note: "Le courriel est accepté par le service d'envoi ; sa réception n'est pas garantie (indésirables).",
+          }),
+        };
+      } catch (error) {
+        console.error("send_quote", error);
+        state.lead = { ...state.lead, notes: [state.lead.notes, `Échec d'envoi automatique de soumission (${model.name})`].filter(Boolean).join(" — ") };
+        return {
+          isError: true,
+          content: "L'envoi a échoué pour une raison technique. Ne réessaie pas. Dis au client qu'un conseiller lui envoie la soumission officielle par courriel rapidement ; ses coordonnées sont enregistrées.",
+        };
+      }
+    }
+
+    case "email_spec_sheet": {
+      const model = findModel(String(args.model_key));
+      if (!model) return { isError: true, content: "Modèle inconnu." };
+      const email = String(args.email).trim().toLowerCase();
+      if (!isEmail(email)) return { isError: true, content: "Courriel invalide : redemande-le." };
+      state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { email, name: args.name as string | null }, input.now);
+      if (!quoteEnv?.RESEND_API_KEY || quoteEnv.QUOTATION_EMAIL_ENABLED !== "true") {
+        return { isError: true, content: `L'envoi de courriels n'est pas activé. Donne plutôt au client le lien de la fiche : ${model.url}` };
+      }
+      try {
+        await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: args.name as string | null, rows: descriptionRows(model, null) }, doFetch);
+        return { content: JSON.stringify({ sent: true, email }) };
+      } catch (error) {
+        console.error("email_spec_sheet", error);
+        return { isError: true, content: `L'envoi a échoué. Donne au client le lien de la fiche : ${model.url}` };
+      }
+    }
+
+    case "transfer_to_human":
+      state.transferReason = String(args.reason);
+      return {
+        content: "Transfert fait : l'équipe est prévenue et le bot est en pause. Dis au client qu'un membre de l'équipe va lui répondre ici.",
+      };
+
+    default:
+      return { isError: true, content: `Outil inconnu : ${toolUse.name}` };
+  }
+}
+
 export async function runAgent(input: AgentInput): Promise<AgentResult> {
   const client = new Anthropic({ apiKey: input.apiKey, fetch: input.fetch });
   const messages: Anthropic.Beta.BetaMessageParam[] = [
@@ -85,9 +261,8 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     { role: "user", content: input.userContent },
   ];
 
-  let lead = input.lead;
-  const hadContact = Boolean(lead?.phone || lead?.email);
-  let transferReason: string | null = null;
+  const state: ToolState = { lead: input.lead, transferReason: null, quote: null };
+  const hadContact = Boolean(input.lead?.phone || input.lead?.email);
   const replyParts: string[] = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -120,51 +295,20 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
 
     // On renvoie la réponse telle quelle (blocs de réflexion compris), puis tous les résultats d'outils.
     messages.push({ role: "assistant", content: response.content });
-    const results: Anthropic.Beta.BetaToolResultBlockParam[] = toolUses.map((toolUse) => {
-      if (toolUse.name === "save_lead") {
-        const update = toolUse.input as LeadUpdate;
-        if (update.phone) {
-          const phone = normalizePhone(update.phone);
-          if (!phone) {
-            return {
-              type: "tool_result",
-              tool_use_id: toolUse.id,
-              is_error: true,
-              content: `« ${update.phone} » ne ressemble pas à un numéro de téléphone. Les autres informations n'ont pas été enregistrées : redemande poliment le numéro au client, puis rappelle save_lead.`,
-            };
-          }
-          update.phone = phone;
-        }
-        lead = mergeLead(lead ?? emptyLead(input.psid, input.now), update, input.now);
-        const missing = missingFields(lead);
-        return {
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
-            saved: true,
-            lead: { name: lead.name, company: lead.company, usage: lead.usage, power_kw: lead.power_kw, city: lead.city, voltage: lead.voltage, enclosure: lead.enclosure, phone: lead.phone, email: lead.email },
-            missing,
-          }),
-        };
-      }
-      if (toolUse.name === "transfer_to_human") {
-        transferReason = (toolUse.input as { reason: string }).reason;
-        return {
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: "Transfert fait : l'équipe est prévenue et le bot est en pause. Dis au client qu'un membre de l'équipe va lui répondre ici, sans lui poser d'autre question.",
-        };
-      }
-      return { type: "tool_result", tool_use_id: toolUse.id, is_error: true, content: `Outil inconnu : ${toolUse.name}` };
-    });
+    const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
+    for (const toolUse of toolUses) {
+      const outcome = await runTool(toolUse, input, state);
+      results.push({ type: "tool_result", tool_use_id: toolUse.id, content: outcome.content, ...(outcome.isError ? { is_error: true } : {}) });
+    }
     messages.push({ role: "user", content: results });
   }
 
   const reply = replyParts.join("\n\n").trim();
   return {
-    reply: reply || "Un instant, je vérifie ça avec l'équipe.",
-    lead,
-    leadQualified: !hadContact && Boolean(lead?.phone || lead?.email),
-    transferReason,
+    reply: reply || "Je vérifie ça avec notre équipe technique. Quelle puissance ou quels équipements voulez-vous alimenter?",
+    lead: state.lead,
+    leadQualified: !hadContact && Boolean(state.lead?.phone || state.lead?.email),
+    transferReason: state.transferReason,
+    quote: state.quote,
   };
 }
