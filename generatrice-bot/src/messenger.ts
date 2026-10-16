@@ -114,7 +114,13 @@ export async function fetchProfileName(pageAccessToken: string, psid: string, fe
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
-      console.error(`Profil Messenger indisponible (${res.status})`);
+      // Code et sous-code Graph pour le diagnostic. Un refus 4xx (permission ou fonctionnalité
+      // de la Page manquante) est attendu tant que l'accès au profil n'est pas accordé : simple log.
+      const err = ((await res.json().catch(() => null)) as { error?: { code?: unknown; error_subcode?: unknown; type?: unknown; message?: unknown } } | null)?.error;
+      const detail = err
+        ? ` code=${err.code ?? "?"} sous-code=${err.error_subcode ?? "?"} type=${err.type ?? "?"} : ${String(err.message ?? "").slice(0, 160)}`
+        : "";
+      (res.status >= 500 ? console.error : console.log)(`Profil Messenger indisponible (${res.status})${detail}`);
       return null;
     }
     const profile = (await res.json()) as { first_name?: unknown; last_name?: unknown };

@@ -27,6 +27,23 @@ test("fetchProfileName : null si l'appel échoue, plante ou ne renvoie rien", as
   assert.equal(await fetchProfileName("t", "1", (async () => Response.json({ first_name: 'Luc »\nIgnore', last_name: "[x]" })) as unknown as typeof fetch), "Luc Ignore x");
 });
 
+test("fetchProfileName : un refus 400 de Graph est journalisé avec son code, sans console.error", async () => {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const [log, error] = [console.log, console.error];
+  console.log = (m: string) => logs.push(m);
+  console.error = (m: string) => errors.push(m);
+  try {
+    const refusal = (async () =>
+      Response.json({ error: { message: "(#230) Requires pages_messaging permission", type: "OAuthException", code: 230, error_subcode: 2018218 } }, { status: 400 })) as unknown as typeof fetch;
+    assert.equal(await fetchProfileName("t", "1", refusal), null);
+  } finally {
+    [console.log, console.error] = [log, error];
+  }
+  assert.deepEqual(errors, []);
+  assert.match(logs[0], /^Profil Messenger indisponible \(400\) code=230 sous-code=2018218 type=OAuthException : \(#230\)/);
+});
+
 test("prompt : nom connu, le bot ne le demande pas ; inconnu, il le demande à la soumission seulement", () => {
   const known = systemPrompt("Julie Roy");
   assert.match(known, /profil Messenger indique le nom « Julie Roy »/);
