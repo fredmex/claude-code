@@ -74,7 +74,7 @@ test("refus de sécurité : message poli, pas d'exception", async () => {
 });
 
 test("send_quote refusé sans confirmation explicite, puis envoyé après", async () => {
-  const input = { model_key: "perkins-40", full_name: "Julie Roy", company: "Ferme Roy", email: "julie@example.com", phone: "450 555-0000", address: null, voltage: null, quantity: 1 };
+  const input = { model_key: "perkins-40", full_name: "Julie Roy", company: "Ferme Roy", email: "julie@example.com", phone: "450 555-0000", address: "123 rang Saint-Paul, Saint-Hyacinthe, J2S 1A1", voltage: null, quantity: 1 };
   const claudeResponses = [
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { ...input, client_confirmed: false } }] },
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "send_quote", input: { ...input, client_confirmed: true } }] },
@@ -103,7 +103,7 @@ test("send_quote refusé sans confirmation explicite, puis envoyé après", asyn
 test("send_quote avec un courriel déjà dans HubSpot : transfert à l'équipe", async () => {
   const backends = fakeBackends({ existingContact: true });
   const claude = fakeClaude([
-    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: null, address: null, voltage: null, quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: "514 555-1111", address: "45 rue Principale, Laval, H7N 1A1", voltage: null, quantity: 1, client_confirmed: true } }] },
     { stop_reason: "end_turn", content: [{ type: "text", text: "Votre courriel correspond à un dossier existant. Quel est le meilleur moment pour vous joindre?" }] },
   ]);
   const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
@@ -114,11 +114,21 @@ test("send_quote avec un courriel déjà dans HubSpot : transfert à l'équipe",
 
 test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé, le client est enregistré", async () => {
   const claude = fakeClaude([
-    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc", company: null, email: "marc@example.com", phone: null, address: null, voltage: null, quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc", company: null, email: "marc@example.com", phone: "514 555-1111", address: "45 rue Principale, Laval, H7N 1A1", voltage: null, quantity: 1, client_confirmed: true } }] },
     { stop_reason: "end_turn", content: [{ type: "text", text: "Un conseiller vous l'envoie rapidement. Pour quelle date en auriez-vous besoin?" }] },
   ]);
   const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: claude.fetch, quoteEnv: { QUOTE_REGISTER_URL: "https://registre.test" } });
   assert.equal(result.quote, null);
   assert.equal(result.lead?.email, "marc@example.com");
   assert.equal(claude.requests[1].messages.at(-1).content[0].is_error, true);
+});
+
+test("send_quote sans adresse ni téléphone : le bot doit les demander", async () => {
+  const claude = fakeClaude([
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: "514 555-1111", address: "", voltage: null, quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "Quelle est l'adresse complète pour la soumission?" }] },
+  ]);
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: claude.fetch, quoteEnv });
+  assert.equal(result.quote, null);
+  assert.match(claude.requests[1].messages.at(-1).content[0].content, /adresse complète/);
 });

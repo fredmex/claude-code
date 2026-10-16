@@ -78,10 +78,10 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
       properties: {
         model_key: { type: "string", enum: QUOTABLE_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
         full_name: { type: "string", description: "Nom complet du client." },
-        company: nullable("string", "Entreprise, s'il y a lieu."),
+        company: nullable("string", "Nom de l'entreprise si la soumission est au nom d'une entreprise ; null si elle est à titre personnel."),
         email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
-        phone: nullable("string", "Téléphone du client."),
-        address: nullable("string", "Adresse de facturation, si le client l'a donnée."),
+        phone: { type: "string", description: "Téléphone du client, pour compléter la soumission." },
+        address: { type: "string", description: "Adresse complète pour la soumission : numéro, rue, ville, code postal." },
         voltage: nullable("string", "Tension demandée, ex. « 120/240 V » ou « 600 V » ; null pour celle du catalogue."),
         quantity: { type: "integer", description: "Nombre d'unités : 1, sauf si le client a lui-même demandé plusieurs unités. Ne pose jamais la question." },
         client_confirmed: { type: "boolean", description: "true seulement si le client vient de confirmer explicitement le récapitulatif." },
@@ -173,6 +173,9 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       const email = String(args.email).trim().toLowerCase();
       const fullName = String(args.full_name).trim();
       if (!isEmail(email) || !fullName) return { isError: true, content: "Nom complet ou courriel invalide : redemande-les au client." };
+      const address = String(args.address ?? "").trim();
+      if (address.length < 8) return { isError: true, content: "Il manque l'adresse complète pour la soumission (numéro, rue, ville, code postal) : demande-la au client." };
+      if (typeof args.phone !== "string" || !normalizePhone(args.phone)) return { isError: true, content: "Il manque un numéro de téléphone valide pour compléter la soumission : demande-le au client." };
       const quantity = Math.max(1, Math.min(20, Math.floor(Number(args.quantity) || 1)));
       const phone = typeof args.phone === "string" ? normalizePhone(args.phone) : null;
       state.lead = mergeLead(state.lead ?? emptyLead(input.psid, input.now), { name: fullName, email, phone, company: args.company as string | null }, input.now);
@@ -198,7 +201,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
               company: (args.company as string | null) || null,
               email,
               phone,
-              address: (args.address as string | null) || null,
+              address,
             },
           },
           doFetch,

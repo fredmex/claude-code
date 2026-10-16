@@ -111,6 +111,9 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /même si un envoi précédent a échoué/);
   assert.match(systemPrompt(), /Ne demande jamais la quantité/);
   assert.match(systemPrompt(), /monophasé ou triphasé/);
+  assert.match(systemPrompt(), /pour compléter la soumission/);
+  assert.match(systemPrompt(), /entreprise ou à titre personnel/);
+  assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
 });
 
 test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illegal invocation)", async () => {
