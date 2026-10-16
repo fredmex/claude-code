@@ -123,6 +123,8 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /pour compléter la soumission/);
   assert.match(systemPrompt(), /entreprise ou à titre personnel/);
   assert.doesNotMatch(systemPrompt(), /conseiller le rappelle/);
+  assert.match(systemPrompt(), /continue avec CE modèle/);
+  assert.match(systemPrompt(), /Perkins 40 kW \[perkins-40\] par défaut/);
 });
 
 test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illegal invocation)", async () => {
