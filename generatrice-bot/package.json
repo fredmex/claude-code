@@ -1,14 +1,14 @@
 {
-  "name": "messenger-bot",
+  "name": "generatrice-bot",
   "version": "1.0.0",
   "private": true,
-  "description": "Chatbot service client pour Facebook Messenger (Meta Business), propulsé par Claude, sur Cloudflare Workers.",
+  "description": "Bot Messenger de generatricediesel.com : conversation avec Claude, qualification des prospects et transfert à un humain, sur Cloudflare Workers.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types --no-warnings test/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0"

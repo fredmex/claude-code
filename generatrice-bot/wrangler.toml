@@ -1,10 +1,12 @@
-name = "messenger-bot"
+name = "generatrice-bot"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
 CLAUDE_MODEL = "claude-opus-5-5"
+# Durée de la pause du bot quand un humain prend la conversation.
+HUMAN_PAUSE_HOURS = "24"
 
 # Mémoire des conversations. Créez l'espace avec :
 #   npx wrangler kv namespace create BOT_STATE
@@ -13,8 +15,11 @@ CLAUDE_MODEL = "claude-opus-5-5"
 binding = "BOT_STATE"
 id = "REMPLACEZ_PAR_L_ID_DU_NAMESPACE_KV"
 
-# Secrets (à ne jamais écrire dans ce fichier) :
+# Secrets (jamais dans ce fichier) — voir le README, étape 5 :
 #   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put META_APP_ID
 #   npx wrangler secret put META_APP_SECRET
 #   npx wrangler secret put META_PAGE_ACCESS_TOKEN
 #   npx wrangler secret put META_VERIFY_TOKEN
+#   npx wrangler secret put ADMIN_TOKEN
+#   npx wrangler secret put NOTIFY_WEBHOOK_URL   (facultatif)

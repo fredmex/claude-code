@@ -5,6 +5,11 @@ const GRAPH_API = "https://graph.facebook.com/v21.0";
 // Messenger refuse les messages texte de plus de 2000 caractères.
 export const MAX_MESSAGE_LENGTH = 2000;
 
+export interface Attachment {
+  type: "image" | "audio" | "video" | "file" | "location" | "fallback" | string;
+  payload?: { url?: string; sticker_id?: number };
+}
+
 export interface MessagingEvent {
   sender: { id: string };
   recipient: { id: string };
@@ -12,8 +17,12 @@ export interface MessagingEvent {
   message?: {
     mid: string;
     text?: string;
+    // Vrai pour les messages envoyés PAR la Page (par le bot ou par un humain).
     is_echo?: boolean;
-    attachments?: unknown[];
+    // Sur un écho : l'application qui a envoyé le message. Absent quand un
+    // humain a répondu depuis la boîte de réception Meta Business Suite.
+    app_id?: number;
+    attachments?: Attachment[];
     quick_reply?: { payload: string };
   };
   postback?: { title: string; payload: string };
