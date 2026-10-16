@@ -7,7 +7,7 @@ import { systemPrompt } from "./business.ts";
 import { findModel, MODEL_KEYS, QUOTABLE_KEYS } from "./catalogue.ts";
 import { emptyLead, mergeLead, missingFields, normalizePhone, type Lead, type LeadUpdate } from "./leads.ts";
 import { descriptionRows, formatMoney } from "./quote-pdf.ts";
-import { ExistingContactError, isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
+import { isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
 
 /** Historique conservé entre deux messages : uniquement le texte échangé. */
 export interface Turn {
@@ -219,13 +219,6 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
           }),
         };
       } catch (error) {
-        if (error instanceof ExistingContactError) {
-          state.transferReason = `Courriel déjà dans HubSpot (contact ${error.contactId}) : soumission ${model.name} à vérifier pour éviter un doublon`;
-          return {
-            isError: true,
-            content: "Ce courriel correspond à un dossier client existant : aucune soumission n'a été envoyée. Dis au client que son courriel correspond à un dossier existant et que notre équipe vérifie sa demande pour éviter un doublon, puis qu'un membre de l'équipe lui répond ici.",
-          };
-        }
         console.error("send_quote", error);
         const reason = error instanceof Error ? error.message.slice(0, 80) : "inconnue";
         state.lead = { ...state.lead, notes: [state.lead.notes, `Échec d'envoi automatique de soumission (${model.name}) : ${reason}`].filter(Boolean).join(" — ") };

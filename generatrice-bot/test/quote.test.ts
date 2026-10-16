@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CATALOGUE, findModel, phasesFor } from "../src/catalogue.ts";
 import { addMonths, buildQuotePdf, computeTotals, descriptionRows, formatMoney } from "../src/quote-pdf.ts";
-import { ExistingContactError, sendOfficialQuote } from "../src/quote-service.ts";
+import { sendOfficialQuote } from "../src/quote-service.ts";
 import { PDFDocument } from "pdf-lib";
 import { fakeBackends, quoteEnv } from "./helpers.ts";
 
@@ -81,11 +81,20 @@ test("sendOfficialQuote : HubSpot, numéro du registre, PDF archivé et envoyé,
   assert.equal((mailCall.init.headers as Record<string, string>)["Idempotency-Key"], "messenger-quote-S-2026-0042-R1");
 });
 
-test("contact HubSpot existant : rien n'est écrit ni envoyé", async () => {
+test("contact HubSpot existant : réutilisé sans être modifié, soumission envoyée quand même", async () => {
   const { calls, fetchImpl } = fakeBackends({ existingContact: true });
-  await assert.rejects(sendOfficialQuote(quoteEnv, request, fetchImpl), ExistingContactError);
+  const result = await sendOfficialQuote(quoteEnv, request, fetchImpl);
+  assert.equal(result.contactId, "77");
+  assert.equal(result.number, "S-2026-0042");
   const paths = calls.map((c) => new URL(c.url).pathname);
-  assert.deepEqual(paths, ["/account-info/v3/details", "/crm/v3/objects/contacts/search"]);
+  assert.ok(!paths.includes("/crm/v3/objects/contacts"), "aucun contact créé ni modifié");
+  assert.ok(!calls.some((c) => c.init.method === "PATCH" && c.url.includes("/contacts/")), "aucun champ du contact écrasé");
+  assert.ok(paths.includes("/emails"));
+  const firstNote = JSON.parse(String(calls.find((c) => c.url.endsWith("/crm/v3/objects/notes"))!.init.body));
+  assert.match(firstNote.properties.hs_note_body, /contact existant/);
+  assert.equal(firstNote.associations[0].to.id, "77");
+  const quoteBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/quotes"))!.init.body));
+  assert.equal(quoteBody.clientId, "hubspot-77");
 });
 
 test("pas de soumission automatique pour le Kubota", async () => {

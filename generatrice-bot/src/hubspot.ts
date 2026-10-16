@@ -15,16 +15,8 @@ export interface HubSpotLead {
   email: string;
   phone: string | null;
   company: string | null;
+  address: string | null;
   powerKw: number | null;
-}
-
-/** Le courriel du client correspond à un contact déjà dans HubSpot : l'équipe vérifie. */
-export class ExistingContactError extends Error {
-  contactId: string;
-  constructor(contactId: string) {
-    super("existing_contact_review");
-    this.contactId = contactId;
-  }
 }
 
 const escapeHtml = (s: string) =>
@@ -70,21 +62,25 @@ export class HubSpot {
     if (Number(details.portalId) !== HUBSPOT_PORTAL_ID) throw new Error("hubspot_wrong_account");
   }
 
-  /** Crée le contact ; si le courriel existe déjà, ne touche à rien et lève ExistingContactError. */
-  async createNewContact(lead: HubSpotLead): Promise<string> {
+  /**
+   * Retrouve le contact par courriel ; sinon le crée. Un contact existant n'est
+   * jamais modifié : les nouvelles informations vont dans une note.
+   */
+  async findOrCreateContact(lead: HubSpotLead): Promise<{ id: string; existing: boolean }> {
     await this.verifyPortal();
     const found = await this.request<{ total: number; results: { id: string }[] }>("/crm/v3/objects/contacts/search", {
       method: "POST",
       body: { filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: lead.email.toLowerCase() }] }], properties: ["email"], limit: 2 },
     });
-    if (found.total) throw new ExistingContactError(found.results[0].id);
+    if (found.total) return { id: found.results[0].id, existing: true };
     const [firstname, ...rest] = lead.fullName.trim().split(/\s+/);
     const properties: Record<string, string> = { email: lead.email.toLowerCase(), firstname };
     if (rest.length) properties.lastname = rest.join(" ");
     if (lead.phone) properties.phone = lead.phone;
     if (lead.company) properties.company = lead.company.slice(0, 254);
+    if (lead.address) properties.address = lead.address.slice(0, 254);
     const contact = await this.request<{ id: string }>("/crm/v3/objects/contacts", { method: "POST", body: { properties } });
-    return contact.id;
+    return { id: contact.id, existing: false };
   }
 
   async createDeal(contactId: string, lead: HubSpotLead, stage = "qualifiedtobuy"): Promise<string> {

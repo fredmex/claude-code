@@ -100,16 +100,16 @@ test("send_quote refusé sans confirmation explicite, puis envoyé après", asyn
   assert.equal(findModel("perkins-40")?.priceCad, 29000);
 });
 
-test("send_quote avec un courriel déjà dans HubSpot : transfert à l'équipe", async () => {
+test("send_quote avec un courriel déjà dans HubSpot : la soumission part quand même, sans transfert", async () => {
   const backends = fakeBackends({ existingContact: true });
   const claude = fakeClaude([
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: "514 555-1111", address: "45 rue Principale, Laval, H7N 1A1", voltage: null, quantity: 1, client_confirmed: true } }] },
-    { stop_reason: "end_turn", content: [{ type: "text", text: "Votre courriel correspond à un dossier existant. Quel est le meilleur moment pour vous joindre?" }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "Votre soumission S-2026-0042 est partie. Voulez-vous aussi la fiche du 15 kW?" }] },
   ]);
   const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
   const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv });
-  assert.equal(result.quote, null);
-  assert.match(result.transferReason ?? "", /HubSpot/);
+  assert.equal(result.quote?.number, "S-2026-0042");
+  assert.equal(result.transferReason, null);
 });
 
 test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé, le client est enregistré", async () => {

@@ -1,10 +1,9 @@
 // Soumission officielle : numéro réservé dans l'application « solution-nrj-soumissions »,
 // PDF au format approuvé, envoi par Resend depuis ventes@solutionnrj.com.
 import { QUOTE_CONDITIONS, type Model } from "./catalogue.ts";
-import { ExistingContactError, HubSpot, hubspotEnabled, type HubSpotEnv } from "./hubspot.ts";
+import { HubSpot, hubspotEnabled, type HubSpotEnv } from "./hubspot.ts";
 import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type QuoteClient } from "./quote-pdf.ts";
 
-export { ExistingContactError };
 
 export interface QuoteEnv extends HubSpotEnv {
   QUOTE_REGISTER_URL: string;
@@ -153,17 +152,30 @@ export interface QuoteResultWithCrm extends QuoteResult {
 
 /**
  * Parcours complet, dans l'ordre de l'ancien service Messenger :
- * contact HubSpot (jamais écrasé) → affaire → numéro du registre → PDF →
+ * contact HubSpot (retrouvé ou créé, jamais écrasé) → affaire → numéro du registre → PDF →
  * archive privée HubSpot → courriel Resend → étape de l'affaire + note.
- * Lève ExistingContactError si le courriel correspond déjà à un contact.
+ * Un contact existant est réutilisé sans être modifié.
  */
 export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResultWithCrm> {
   if (req.model.priceCad === null || !req.model.quotable) throw new Error("not_quotable");
   if (!isEmail(req.client.email) || !req.client.fullName.trim()) throw new Error("client_identity_required");
 
   const hub = new HubSpot(env, fetchImpl);
-  const crmLead = { fullName: req.client.fullName, email: req.client.email, phone: req.client.phone, company: req.client.company, powerKw: req.model.powerKw };
-  const contactId = await hub.createNewContact(crmLead);
+  const crmLead = { fullName: req.client.fullName, email: req.client.email, phone: req.client.phone, company: req.client.company, address: req.client.address, powerKw: req.model.powerKw };
+  const contact = await hub.findOrCreateContact(crmLead);
+  const contactId = contact.id;
+  if (contact.existing) {
+    // Contact déjà connu : ses champs restent tels quels, les infos données dans Messenger vont en note.
+    await hub.note(
+      contactId,
+      ["Demande Messenger (contact existant, champs non modifiés). Informations données par le client :",
+        `Nom : ${req.client.fullName}`,
+        req.client.company ? `Entreprise : ${req.client.company}` : "À titre personnel",
+        req.client.address ? `Adresse : ${req.client.address}` : null,
+        req.client.phone ? `Téléphone : ${req.client.phone}` : null,
+      ].filter(Boolean).join("\n"),
+    );
+  }
   const dealId = await hub.createDeal(contactId, crmLead, "qualifiedtobuy");
 
   const requestId = `messenger-${req.psid}-${req.model.key}-${req.quantity}`;
