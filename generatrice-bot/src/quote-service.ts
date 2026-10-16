@@ -1,9 +1,12 @@
 // Soumission officielle : numéro réservé dans l'application « solution-nrj-soumissions »,
 // PDF au format approuvé, envoi par Resend depuis ventes@solutionnrj.com.
-import type { Model } from "./catalogue.ts";
+import { QUOTE_CONDITIONS, type Model } from "./catalogue.ts";
+import { ExistingContactError, HubSpot, hubspotEnabled, type HubSpotEnv } from "./hubspot.ts";
 import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type QuoteClient } from "./quote-pdf.ts";
 
-export interface QuoteEnv {
+export { ExistingContactError };
+
+export interface QuoteEnv extends HubSpotEnv {
   QUOTE_REGISTER_URL: string;
   QUOTE_REGISTER_PASSWORD?: string;
   QUOTE_WRITES_ENABLED?: string;
@@ -13,6 +16,8 @@ export interface QuoteEnv {
 
 export interface QuoteRequest {
   psid: string;
+  /** Contact HubSpot du client (requis, comme pour le générateur officiel). */
+  contactId?: string;
   model: Model;
   client: QuoteClient & { email: string };
   quantity: number;
@@ -45,7 +50,8 @@ export function quoteSendingEnabled(env: QuoteEnv): boolean {
     env.QUOTATION_EMAIL_ENABLED === "true" &&
     env.QUOTE_WRITES_ENABLED === "true" &&
     Boolean(env.RESEND_API_KEY) &&
-    Boolean(env.QUOTE_REGISTER_PASSWORD)
+    Boolean(env.QUOTE_REGISTER_PASSWORD) &&
+    hubspotEnabled(env)
   );
 }
 
@@ -70,13 +76,13 @@ export async function reserveQuoteNumber(
 
   const c = req.client;
   const client = {
-    id: `messenger-${req.psid}`,
+    id: req.contactId ? `hubspot-${req.contactId}` : `messenger-${req.psid}`,
     name: c.fullName,
     company: c.company ?? "",
     email: c.email,
     phone: c.phone ?? "",
     address: c.address ?? "",
-    notes: "Client Messenger (bot Claude)",
+    notes: req.contactId ? `Contact HubSpot ${req.contactId}` : "Client Messenger",
   };
   const clientRes = await fetchImpl(`${base}/api/clients`, { method: "POST", headers, body: JSON.stringify(client), signal: AbortSignal.timeout(15000) });
   if (!clientRes.ok) throw new Error(`quote_client_${clientRes.status}`);
@@ -96,7 +102,7 @@ export async function reserveQuoteNumber(
       status: "Envoyée",
       followup: "",
       lines: [{ description: `Génératrice diesel ${m.brand} ${m.powerKw} kW`, qty: req.quantity, price: String(m.priceCad) }],
-      conditions: "Installation, disponibilité et délai à confirmer.\nMême prix selon la tension.\nAucun retour une fois la commande confirmée.",
+      conditions: "Pour toute commande, dépôt de 30 % du total avec taxes.\n" + QUOTE_CONDITIONS.join("\n"),
       notes: `Envoyée par le bot Messenger. Tension demandée : ${req.voltage ?? "non précisée"}.`,
     }),
   });
@@ -132,16 +138,34 @@ const html = (lines: string[]) =>
   SIGNATURE_HTML +
   "</div>";
 
-export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResult> {
-  if (req.model.priceCad === null) throw new Error("price_on_request");
+export interface QuoteResultWithCrm extends QuoteResult {
+  contactId: string;
+  dealId: string;
+  fileId: string;
+}
+
+/**
+ * Parcours complet, dans l'ordre de l'ancien service Messenger :
+ * contact HubSpot (jamais écrasé) → affaire → numéro du registre → PDF →
+ * archive privée HubSpot → courriel Resend → étape de l'affaire + note.
+ * Lève ExistingContactError si le courriel correspond déjà à un contact.
+ */
+export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResultWithCrm> {
+  if (req.model.priceCad === null || !req.model.quotable) throw new Error("not_quotable");
   if (!isEmail(req.client.email) || !req.client.fullName.trim()) throw new Error("client_identity_required");
 
+  const hub = new HubSpot(env, fetchImpl);
+  const crmLead = { fullName: req.client.fullName, email: req.client.email, phone: req.client.phone, company: req.client.company, powerKw: req.model.powerKw };
+  const contactId = await hub.createNewContact(crmLead);
+  const dealId = await hub.createDeal(contactId, crmLead, "qualifiedtobuy");
+
   const requestId = `messenger-${req.psid}-${req.model.key}-${req.quantity}`;
-  const quote = await reserveQuoteNumber(env, req, requestId, fetchImpl);
+  const quote = await reserveQuoteNumber(env, { ...req, contactId }, requestId, fetchImpl);
+  const revision = quote.revision || 1;
   const validUntil = addMonths(req.issuedOn);
   const pdf = await buildQuotePdf({
     number: quote.number,
-    revision: quote.revision || 1,
+    revision,
     issuedOn: req.issuedOn,
     validUntil,
     client: req.client,
@@ -149,19 +173,24 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
     quantity: req.quantity,
     voltage: req.voltage,
   });
+  const fileId = await hub.archivePdf(contactId, pdf, quote.number);
+  await hub.note(contactId, `Soumission ${quote.number} générée. Envoi non confirmé.`, fileId);
+
   const totals = computeTotals(req.model.priceCad, req.quantity);
-  const title = `Génératrice diesel ${req.model.brand} ${req.model.powerKw} kW`;
+  const title = req.model.name.replace(/ \(ouverte\)$/, "");
   const lines = [
     `Bonjour ${req.client.fullName},`,
     "",
-    `Merci de votre intérêt. Vous trouverez ci-joint votre soumission ${quote.number} pour une ${title.toLowerCase()}.`,
+    `Veuillez trouver en pièce jointe votre soumission ${quote.number} pour une ${title.toLowerCase()}.`,
     "",
-    `Total : ${formatMoney(totals.total)} taxes incluses (dépôt requis : ${formatMoney(totals.deposit)}).`,
-    "La soumission est valide 3 mois. L'installation, la disponibilité et le délai sont à confirmer avec notre équipe.",
+    `Total : ${formatMoney(totals.total)} taxes incluses.`,
+    "Validité de la soumission : 3 mois.",
+    "Pour toute commande, dépôt de 30 % du total avec taxes.",
+    "L'installation, la disponibilité et le délai sont à confirmer avec notre équipe.",
     "",
-    `Fiche et photos du modèle : ${req.model.url}`,
+    `Fiche du modèle : ${req.model.url}`,
     "",
-    "Pour accepter, signez la soumission et retournez-la par courriel. Pour toute question, répondez simplement à ce message.",
+    "Pour accepter, signez la soumission et retournez-la par courriel.",
   ];
   const emailId = await sendEmail(
     env,
@@ -175,10 +204,14 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
       html: html(lines),
       attachments: [{ filename: `${quote.number}.pdf`, content: toBase64(pdf) }],
     },
-    `messenger-quote-${quote.number}-R${quote.revision || 1}`,
+    `messenger-quote-${quote.number}-R${revision}`,
     fetchImpl,
   );
-  return { number: quote.number, revision: quote.revision || 1, emailId, total: totals.total, deposit: totals.deposit };
+
+  // Le courriel est accepté par Resend : ce n'est pas une preuve de réception.
+  await hub.setDealStage(dealId, "presentationscheduled");
+  await hub.note(contactId, `Soumission ${quote.number}. Courriel accepté par Resend : ${emailId}. Destinataire : ${req.client.email}. Livraison en boîte non confirmée.`, fileId);
+  return { number: quote.number, revision, emailId, total: totals.total, deposit: totals.deposit, contactId, dealId, fileId };
 }
 
 /** Fiche détaillée par courriel (sans numéro de soumission). */

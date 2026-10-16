@@ -48,6 +48,37 @@ client le demande.
 
 ---
 
+## Déployer à la place de l'ancien bot ChatGPT (depuis le portable)
+
+Le Worker garde le nom `solution-nrj-messenger` : les secrets déjà installés
+(Meta, HubSpot, registre des soumissions, Resend, ADMIN_TOKEN) sont conservés,
+et les Durable Objects de l'ancien bot ne sont pas touchés. Le bot est déployé
+**éteint** (`MESSENGER_ENABLED = "false"`).
+
+```powershell
+git clone https://github.com/fredmex/claude-code.git     # ou : git pull, si déjà cloné
+cd claude-code
+git checkout claude/messenger-chatbot
+cd generatrice-bot
+npm.cmd install
+npx.cmd wrangler secret put ANTHROPIC_API_KEY      # clé de platform.claude.com
+npx.cmd wrangler secret delete OPENAI_API_KEY      # retire ChatGPT
+npx.cmd wrangler deploy
+```
+
+Ensuite :
+
+1. Vérifier que `RESEND_API_KEY`, `HUBSPOT_ACCESS_TOKEN` et
+   `QUOTE_REGISTER_PASSWORD` existent : `npx.cmd wrangler secret list`.
+   Sinon, `npx.cmd wrangler secret put <NOM>`.
+2. Test par Frederic seul : mettre son PSID dans le secret
+   `MESSENGER_OWNER_TEST_PSID`, passer `MESSENGER_ENABLED` à `"true"` et
+   redéployer. Avec `MESSENGER_NEW_ONLY = "true"` et sans liste valide de
+   clients existants, seul Frederic reçoit des réponses.
+3. Ouverture aux nouveaux clients : renseigner `MESSENGER_EXISTING_BASELINE`
+   (liste des clients existants) et `MESSENGER_ACTIVATED_AT`, puis redéployer.
+4. Retour en arrière possible à tout moment : `npx.cmd wrangler rollback`.
+
 ## Guide pas à pas
 
 Comptez environ 45 minutes. Il vous faut : un ordinateur, un compte Facebook

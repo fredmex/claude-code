@@ -1,32 +1,52 @@
-name = "generatrice-bot"
+# Remplace l'ancien bot ChatGPT : même nom de Worker, donc mêmes secrets Meta,
+# HubSpot, registre et Resend déjà installés sur Cloudflare.
+name = "solution-nrj-messenger"
 main = "src/index.ts"
-compatibility_date = "2026-09-01"
+account_id = "d54137d1bad690d828265766d3f36566"
+compatibility_date = "2026-10-09"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [vars]
 CLAUDE_MODEL = "claude-opus-5-5"
-# Durée de la pause du bot quand un humain prend la conversation.
-HUMAN_PAUSE_HOURS = "24"
-# Interrupteur général : "true" pour que le bot réponde.
+META_PAGE_ID = "108271818899977"
+# Interrupteur général : "true" pour que le bot réponde. Déployé éteint.
 MESSENGER_ENABLED = "false"
-# Registre des soumissions (numéros S-AAAA-NNNN).
+# Nouveaux clients seulement (liste MESSENGER_EXISTING_BASELINE + MESSENGER_ACTIVATED_AT, secrets).
+MESSENGER_NEW_ONLY = "true"
+# Pause du bot quand un humain prend la conversation.
+HUMAN_PAUSE_HOURS = "24"
+# Soumissions : registre des numéros, HubSpot, courriel Resend.
 QUOTE_REGISTER_URL = "https://solution-nrj-soumissions.monscorbu.workers.dev"
-# Mettre à "true" une fois RESEND_API_KEY et QUOTE_REGISTER_PASSWORD installés
-# et le domaine solutionnrj.com vérifié dans Resend.
-QUOTE_WRITES_ENABLED = "false"
-QUOTATION_EMAIL_ENABLED = "false"
+QUOTE_WRITES_ENABLED = "true"
+HUBSPOT_WRITES_ENABLED = "true"
+QUOTATION_EMAIL_ENABLED = "true"
 
-# Mémoire des conversations (espace KV « solution-nrj-messenger-state », déjà créé).
+# Mémoire des conversations du nouveau bot.
 [[kv_namespaces]]
 binding = "BOT_STATE"
 id = "ecf9cef5e0a14f4cbe57b636398bbcb0"
 
-# Secrets (jamais dans ce fichier) — voir le README, étape 5 :
-#   npx wrangler secret put ANTHROPIC_API_KEY
-#   npx wrangler secret put META_APP_SECRET
-#   npx wrangler secret put META_PAGE_ACCESS_TOKEN
-#   npx wrangler secret put META_VERIFY_TOKEN
-#   npx wrangler secret put ADMIN_TOKEN
-#   npx wrangler secret put RESEND_API_KEY
-#   npx wrangler secret put QUOTE_REGISTER_PASSWORD
-#   npx wrangler secret put NOTIFY_WEBHOOK_URL   (facultatif)
+# Durable Objects de l'ancien bot : conservés tels quels (voir src/index.ts).
+[[durable_objects.bindings]]
+name = "CONVERSATIONS"
+class_name = "Conversation"
+
+[[durable_objects.bindings]]
+name = "MAIL_GATE"
+class_name = "MailGate"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Conversation"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["MailGate"]
+
+# Secrets (jamais dans ce fichier), déjà présents sur l'ancien Worker sauf indication :
+#   META_APP_SECRET, META_PAGE_ACCESS_TOKEN, META_VERIFY_TOKEN, ADMIN_TOKEN,
+#   RESEND_API_KEY, HUBSPOT_ACCESS_TOKEN, QUOTE_REGISTER_PASSWORD,
+#   MESSENGER_EXISTING_BASELINE, MESSENGER_ACTIVATED_AT, MESSENGER_OWNER_TEST_PSID
+# Nouveau :  npx wrangler secret put ANTHROPIC_API_KEY
+# À retirer : npx wrangler secret delete OPENAI_API_KEY

@@ -1,6 +1,6 @@
 // Soumission PDF au format approuvé (PRD, partie 2) : une seule page.
 import { PDFDocument, PDFFont, PDFPage, PDFString, StandardFonts, rgb } from "pdf-lib";
-import { phasesFor, type Model } from "./catalogue.ts";
+import { phasesFor, QUOTE_CONDITIONS, type Model } from "./catalogue.ts";
 
 export const SUPPLIER = {
   name: "Solution NRJ (9547-0233 Québec inc.)",
@@ -8,7 +8,7 @@ export const SUPPLIER = {
   phone: "438-350-6979",
   email: "ventes@solutionnrj.com",
   web: "generatricediesel.com",
-  footer: "NEQ 1181176141 | TPS 742147960RT0001 | TVQ 1233000104TQ0001",
+  footer: "NEQ : 1181176141 | TPS : 742147960RT0001 | TVQ : 1233000104TQ0001",
 };
 
 export const TPS_RATE = 0.05;
@@ -44,19 +44,22 @@ export interface QuoteTotals {
   deposit: number;
 }
 
-const cents = (value: number) => Math.round(value * 100) / 100;
-
+/** Taxes calculées en cents entiers, arrondi au cent supérieur à 0,5 (comme le générateur officiel). */
 export function computeTotals(unitPrice: number, quantity: number): QuoteTotals {
-  const subtotal = cents(unitPrice * quantity);
-  const tps = cents(subtotal * TPS_RATE);
-  const tvq = cents(subtotal * TVQ_RATE);
-  const total = cents(subtotal + tps + tvq);
-  return { subtotal, tps, tvq, total, deposit: cents(total * DEPOSIT_RATE) };
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("quantity_invalid");
+  if (!(unitPrice > 0)) throw new Error("price_invalid");
+  const subtotal = Math.round(unitPrice * 100) * quantity;
+  const tps = Math.round((subtotal * 5) / 100);
+  const tvq = Math.round((subtotal * 9975) / 100000);
+  const total = subtotal + tps + tvq;
+  const deposit = Math.round((total * 30) / 100);
+  return { subtotal: subtotal / 100, tps: tps / 100, tvq: tvq / 100, total: total / 100, deposit: deposit / 100 };
 }
 
+/** « 40 241,25 $ » */
 export function formatMoney(value: number): string {
-  // Espace insécable remplacée par une espace simple : la police standard du PDF ne la contient pas.
-  return value.toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\s/g, " ") + " $";
+  const [int, dec] = value.toFixed(2).split(".");
+  return int.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + "," + dec + " $";
 }
 
 export function formatDate(iso: string): string {
@@ -65,27 +68,28 @@ export function formatDate(iso: string): string {
   return `${d} ${months[m - 1]} ${y}`;
 }
 
-/** Date de validité : 3 mois après l'émission. */
+/** Validité : 3 mois calendaires, plafonnée à la fin du mois (30 nov. → 28 févr.). */
 export function addMonths(iso: string, months = 3): string {
   const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1 + months, d));
-  // 30 nov. + 3 mois = 28/29 févr., pas 2 mars.
-  if (date.getUTCDate() !== d) date.setUTCDate(0);
-  return date.toISOString().slice(0, 10);
+  const n = y * 12 + (m - 1) + months;
+  const year = Math.floor(n / 12);
+  const month = (n % 12) + 1;
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(Math.min(d, last)).padStart(2, "0")}`;
 }
 
-/** Les 11 lignes de description, dans l'ordre exact du PRD. */
+/** Les 11 lignes de description, dans l'ordre demandé par Frederic (15 oct. 2026). */
 export function descriptionRows(model: Model, voltage: string | null): [string, string][] {
   const v = voltage ?? model.voltage;
-  const phases = phasesFor(v);
+  const opened = model.enclosure === "ouvert";
   return [
-    ["Moteur", model.engine ?? model.brand],
+    ["Moteur", model.engine ?? `${model.brand} diesel`],
     ["Puissance", `${model.powerKw} kW`],
     ["Tension", v ?? "À confirmer"],
-    ["Alternateur", model.brand === "Perkins" ? "Stamford d'origine" : "À confirmer"],
-    ["Phases", phases === "À confirmer" ? "À confirmer (60 Hz)" : `${phases}, 60 Hz`],
-    ["Boîtier", model.enclosure === "ouvert" ? "Ouvert" : "Fermé insonorisé"],
-    ["Réservoir", model.enclosure === "ouvert" ? "200 L" : model.tankLitres !== null ? `${model.tankLitres} L` : "À confirmer"],
+    ["Alternateur", "Stamford d'origine"],
+    ["Phases", `${phasesFor(v)} · 60 Hz`],
+    ["Boîtier", opened ? "Ouvert" : "Fermé insonorisé"],
+    ["Réservoir", opened ? "200 litres" : model.tankLitres !== null ? `${model.tankLitres} litres` : "À confirmer"],
     ["Chauffe-moteur", "Inclus"],
     ["Chargeur de batterie", "Intelligent, inclus"],
     ["Contrôleur", "Deep Sea DSE6120"],
@@ -93,11 +97,15 @@ export function descriptionRows(model: Model, voltage: string | null): [string, 
   ];
 }
 
-const NAVY = rgb(0x0b / 255, 0x3b / 255, 0x66 / 255);
-const ORANGE = rgb(0xc2 / 255, 0x41 / 255, 0x0c / 255);
-const INK = rgb(0.1, 0.13, 0.17);
-const MUTED = rgb(0.36, 0.42, 0.48);
-const LINE = rgb(0.82, 0.85, 0.88);
+// Couleurs du générateur officiel (crm/generer_soumission.py).
+const hex = (h: string) => rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255);
+const NAVY = hex("#173A59");
+const INK = hex("#243444");
+const PALE = hex("#EFF4F8");
+const LINE = hex("#D8E2EB");
+const DEPOSIT = hex("#B45309");
+const SMALL = hex("#586A79");
+const BOLT = hex("#1EA7E1");
 const WHITE = rgb(1, 1, 1);
 
 function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
@@ -120,165 +128,190 @@ function wrap(text: string, font: PDFFont, size: number, width: number): string[
 export async function buildQuotePdf(input: QuoteInput): Promise<Uint8Array> {
   if (input.model.priceCad === null) throw new Error("price_on_request");
   const doc = await PDFDocument.create();
-  doc.setTitle(`Soumission ${input.number}`);
+  const rev = `R${String(input.revision).padStart(2, "0")}`;
+  doc.setTitle(`Solution NRJ - ${input.number} ${rev}`);
   doc.setAuthor("Solution NRJ");
   doc.setLanguage("fr-CA");
   const page = doc.addPage([612, 792]); // lettre
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const L = 40;
+  const R = 572;
+  const W = R - L; // 532
 
-  const M = 40; // marge
-  const W = 612 - 2 * M;
-  let y = 792 - M;
+  const text = (s: string, x: number, y: number, size = 9.3, font = regular, color = INK) => page.drawText(s, { x, y, size, font, color });
+  const right = (s: string, xr: number, y: number, size = 9.3, font = regular, color = INK) =>
+    text(s, xr - font.widthOfTextAtSize(s, size), y, size, font, color);
+  const hline = (y: number, x1 = L, x2 = R, thickness = 0.6, color = LINE) => page.drawLine({ start: { x: x1, y }, end: { x: x2, y }, thickness, color });
+  const section = (label: string, y: number) => {
+    page.drawRectangle({ x: L, y: y - 7, width: W, height: 22, color: PALE });
+    text(label, L + 10, y, 9.3, bold);
+  };
 
-  const text = (p: PDFPage, s: string, x: number, yy: number, size = 9, font = regular, color = INK) =>
-    p.drawText(s, { x, y: yy, size, font, color });
-  const right = (s: string, xRight: number, yy: number, size = 9, font = regular, color = INK) =>
-    text(page, s, xRight - font.widthOfTextAtSize(s, size), yy, size, font, color);
+  // En-tête : carré marine avec éclair, « Solution NRJ », « SOUMISSION », numéro.
+  // drawSvgPath place le point (px, py) en (x + px, y - py) : les y sont donc négatifs ici.
+  const roundRect = (x0: number, y0: number, w: number, h: number, r: number) =>
+    `M ${x0 + r} ${-y0} H ${x0 + w - r} Q ${x0 + w} ${-y0} ${x0 + w} ${-(y0 + r)} V ${-(y0 + h - r)} Q ${x0 + w} ${-(y0 + h)} ${x0 + w - r} ${-(y0 + h)} ` +
+    `H ${x0 + r} Q ${x0} ${-(y0 + h)} ${x0} ${-(y0 + h - r)} V ${-(y0 + r)} Q ${x0} ${-y0} ${x0 + r} ${-y0} Z`;
+  page.drawSvgPath(roundRect(L, 727, 46, 46, 10), { x: 0, y: 0, color: NAVY });
+  page.drawSvgPath("M 66 -766 L 51 -746 L 61 -746 L 57 -731 L 75 -753 L 65 -753 Z", { x: 0, y: 0, color: BOLT });
+  text("Solution NRJ", 97, 742, 23, bold, NAVY);
+  right("SOUMISSION", R, 750, 15, bold, NAVY);
+  right(`${input.number} - ${rev}`, R, 731, 10, bold, NAVY);
+  hline(718, L, R, 2, NAVY);
 
-  // 1. En-tête : logo, « SOUMISSION », numéro.
-  if (input.logo) {
-    const image = input.logo.type === "png" ? await doc.embedPng(input.logo.bytes) : await doc.embedJpg(input.logo.bytes);
-    const h = 42;
-    const w = Math.min(180, (image.width / image.height) * h);
-    page.drawImage(image, { x: M, y: y - h, width: w, height: (image.height / image.width) * w });
-  } else {
-    text(page, "Solution NRJ", M, y - 26, 22, bold, NAVY);
-  }
-  right("SOUMISSION", M + W, y - 18, 20, bold, NAVY);
-  right(`${input.number} - R${String(input.revision).padStart(2, "0")}`, M + W, y - 34, 10, bold, INK);
-  y -= 58;
-  page.drawLine({ start: { x: M, y }, end: { x: M + W, y }, thickness: 1.5, color: NAVY });
-  y -= 16;
-
-  // 2. Fournisseur | Client, côte à côte.
-  const colW = (W - 20) / 2;
-  const block = (title: string, lines: string[], x: number) => {
-    let yy = y;
-    text(page, title, x, yy, 8, bold, MUTED);
-    yy -= 13;
+  // Fournisseur | Client.
+  let y = 698;
+  const c = input.client;
+  const supplier = [SUPPLIER.name, SUPPLIER.address, `${SUPPLIER.phone} · ${SUPPLIER.email}`, SUPPLIER.web];
+  // Seulement ce que le client a donné : jamais de ligne « non précisé ».
+  const buyer = [c.fullName, c.company, c.address, [c.phone, c.email].filter(Boolean).join(" · ")].filter((v): v is string => Boolean(v && v.trim()));
+  text("FOURNISSEUR", L, y, 9.3, bold);
+  text("CLIENT", L + 292, y, 9.3, bold);
+  const colLines = (lines: string[], x: number, width: number) => {
+    let yy = y - 14;
     lines.forEach((line, i) => {
-      for (const part of wrap(line, i === 0 ? bold : regular, 9, colW)) {
-        text(page, part, x, yy, 9, i === 0 ? bold : regular);
+      for (const part of wrap(line, i === 0 ? bold : regular, 9.3, width)) {
+        text(part, x, yy, 9.3, i === 0 ? bold : regular);
         yy -= 12;
       }
     });
     return yy;
   };
-  const c = input.client;
-  const clientLines = [c.fullName, c.company, c.address, c.phone, c.email].filter((v): v is string => Boolean(v && v.trim()));
-  const yA = block("FOURNISSEUR", [SUPPLIER.name, SUPPLIER.address, `${SUPPLIER.phone} · ${SUPPLIER.email}`, SUPPLIER.web], M);
-  const yB = block("CLIENT", clientLines, M + colW + 20);
-  y = Math.min(yA, yB) - 6;
+  const yA = colLines(supplier, L, 270);
+  const yB = colLines(buyer, L + 292, 240);
+  const partyBottom = Math.min(yA, yB) + 6;
+  page.drawLine({ start: { x: L + 276, y: y + 10 }, end: { x: L + 276, y: partyBottom }, thickness: 1, color: LINE });
+  y = partyBottom - 16;
 
-  // 3. Dates.
-  page.drawRectangle({ x: M, y: y - 6, width: W, height: 20, color: rgb(0.95, 0.96, 0.97) });
-  text(
-    page,
-    `Émise le ${formatDate(input.issuedOn)}   |   Révision du ${formatDate(input.issuedOn)}   |   Valide jusqu'au ${formatDate(input.validUntil)}`,
-    M + 8,
-    y,
-    9,
-  );
-  y -= 34;
+  // Dates.
+  text(`Émise le ${formatDate(input.issuedOn)} | Révision du ${formatDate(input.issuedOn)} | Valide jusqu'au ${formatDate(input.validUntil)}`, L, y, 8, regular, SMALL);
+  y -= 26;
 
-  // 4. Titre.
-  const title = `Génératrice diesel ${input.model.brand} ${input.model.powerKw} kW`;
-  text(page, title, M, y, 16, bold, NAVY);
+  // Titre = nom du modèle.
+  text(input.model.name.replace(/ \(ouverte\)$/, ""), L, y, 17, bold, NAVY);
+  y -= 24;
+
+  // DESCRIPTION DU MODÈLE : 2 colonnes lues de haut en bas, colonne de gauche d'abord.
+  section("DESCRIPTION DU MODÈLE", y);
   y -= 22;
-
-  // 5. Description sur 2 colonnes (gauche puis droite).
   const rows = descriptionRows(input.model, input.voltage);
   const half = Math.ceil(rows.length / 2);
-  const columns = [rows.slice(0, half), rows.slice(half)];
+  const left = rows.slice(0, half);
+  const rightCol = rows.slice(half);
   const rowH = 17;
-  columns.forEach((col, ci) => {
-    const x = M + ci * (colW + 20);
-    col.forEach(([label, value], ri) => {
-      const yy = y - ri * rowH;
-      text(page, label, x, yy, 9, bold, MUTED);
-      text(page, value, x + 110, yy, 9, regular, INK);
-      page.drawLine({ start: { x, y: yy - 5 }, end: { x: x + colW, y: yy - 5 }, thickness: 0.5, color: LINE });
-    });
-  });
-  y -= half * rowH + 4;
-  const small = [
-    input.model.dimensions ? `Dimensions : ${input.model.dimensions}.` : null,
-    "Préparation huile et liquide de refroidissement Prestone. Garantie 1 an ou 1 500 heures, selon la première limite atteinte.",
-  ].filter(Boolean).join(" ");
-  for (const line of wrap(small, regular, 7.5, W)) {
-    text(page, line, M, y, 7.5, regular, MUTED);
-    y -= 10;
+  const tableTop = y + 12;
+  for (let i = 0; i < half; i++) {
+    const yy = y - i * rowH;
+    const [a, b] = left[i];
+    text(a, L + 10, yy, 9.3, bold);
+    text(b, L + 120, yy, 9.3);
+    if (rightCol[i]) {
+      const [cc, d] = rightCol[i];
+      text(cc, L + 276, yy, 9.3, bold);
+      text(d, L + 386, yy, 9.3);
+    }
+    if (i < half - 1) hline(yy - 5.5, L, R, 0.4);
   }
-  y -= 12;
+  page.drawLine({ start: { x: L + 266, y: tableTop }, end: { x: L + 266, y: y - (half - 1) * rowH - 6 }, thickness: 0.6, color: LINE });
+  y -= half * rowH;
 
-  // 6. Prix et taxes.
+  // Autres détails confirmés, en un bloc.
+  const extras: [string, string][] = [];
+  if (input.model.dimensions) extras.push(["Dimensions", input.model.dimensions]);
+  extras.push(["Préparation", "Huile et liquide de refroidissement Prestone inclus"]);
+  extras.push(["Garantie", "1 an ou 1 500 heures, selon la première limite atteinte"]);
+  let x = L + 10;
+  const maxX = R - 10;
+  for (const [i, [k, v]] of extras.entries()) {
+    const parts: [string, PDFFont][] = [[k, bold], [` : ${v}`, regular], [i < extras.length - 1 ? "  ·  " : "", regular]];
+    for (const [segment, font] of parts) {
+      for (const word of segment.split(/(?<= )/)) {
+        const w = font.widthOfTextAtSize(word, 8);
+        if (x + w > maxX) {
+          x = L + 10;
+          y -= 10;
+        }
+        text(word, x, y, 8, font, SMALL);
+        x += w;
+      }
+    }
+  }
+  y -= 26;
+
+  // PRIX ET TAXES.
+  section("PRIX ET TAXES", y);
+  y -= 24;
   const totals = computeTotals(input.model.priceCad, input.quantity);
-  page.drawRectangle({ x: M, y: y - 5, width: W, height: 18, color: rgb(0.93, 0.95, 0.97) });
-  text(page, "Description", M + 6, y, 8.5, bold, MUTED);
-  right("Qté", M + W - 190, y, 8.5, bold, MUTED);
-  right("Prix unitaire", M + W - 90, y, 8.5, bold, MUTED);
-  right("Montant", M + W - 6, y, 8.5, bold, MUTED);
+  const cQty = L + 272;
+  const cUnit = L + 316;
+  text("Description", L + 10, y, 9.3, bold);
+  text("Qté", cQty, y, 9.3, bold);
+  text("Prix unitaire", cUnit, y, 9.3, bold);
+  right("Montant", R - 6, y, 9.3, bold);
+  hline(y - 6);
   y -= 20;
-  text(page, title, M + 6, y, 10, bold);
-  right(String(input.quantity), M + W - 190, y, 10);
-  right(formatMoney(input.model.priceCad), M + W - 90, y, 10);
-  right(formatMoney(totals.subtotal), M + W - 6, y, 10, bold);
-  y -= 10;
-  page.drawLine({ start: { x: M, y }, end: { x: M + W, y }, thickness: 0.5, color: LINE });
-  y -= 18;
+  const itemName = input.model.name.replace(/ \(ouverte\)$/, "");
+  text(itemName, L + 10, y, 9.3);
+  text(String(input.quantity), cQty, y, 9.3);
+  text(formatMoney(input.model.priceCad), cUnit, y, 9.3);
+  right(formatMoney(totals.subtotal), R - 6, y, 9.3);
+  hline(y - 7);
+  y -= 26;
 
-  const totalsX = M + W - 230;
-  const conditions = [
-    "Installation, disponibilité et délai à confirmer.",
-    "Même prix selon la tension.",
-    "Aucun retour une fois la commande confirmée.",
-  ];
+  // Conditions à gauche, totaux à droite. Le dépôt et la validité ne sont pas répétés ici.
   let yc = y;
-  for (const line of conditions) {
-    text(page, line, M, yc, 8.5, regular, INK);
-    yc -= 13;
-  }
-  text(page, "Voir la fiche et les photos en ligne", M, yc, 8.5, bold, NAVY);
-  const linkW = bold.widthOfTextAtSize("Voir la fiche et les photos en ligne", 8.5);
-  page.drawLine({ start: { x: M, y: yc - 2 }, end: { x: M + linkW, y: yc - 2 }, thickness: 0.5, color: NAVY });
-  addLink(doc, page, input.model.url, M, yc - 3, linkW, 11);
-
-  let yt = y;
-  const totalRow = (label: string, value: string) => {
-    text(page, label, totalsX, yt, 9);
-    right(value, M + W - 6, yt, 9);
-    yt -= 15;
-  };
-  totalRow("Sous-total", formatMoney(totals.subtotal));
-  totalRow("TPS (5 %)", formatMoney(totals.tps));
-  totalRow("TVQ (9,975 %)", formatMoney(totals.tvq));
-  yt -= 8;
-  page.drawRectangle({ x: totalsX - 6, y: yt - 7, width: M + W - totalsX + 6, height: 22, color: NAVY });
-  text(page, "TOTAL CAD", totalsX, yt, 10.5, bold, WHITE);
-  right(formatMoney(totals.total), M + W - 6, yt, 10.5, bold, WHITE);
-  yt -= 28;
-  page.drawRectangle({ x: totalsX - 6, y: yt - 8, width: M + W - totalsX + 6, height: 24, color: ORANGE });
-  text(page, "DÉPÔT REQUIS (30 %)", totalsX, yt, 10.5, bold, WHITE);
-  right(formatMoney(totals.deposit), M + W - 6, yt, 10.5, bold, WHITE);
-  y = Math.min(yt - 30, yc - 30);
-
-  // 7. Acceptation du client.
-  text(page, "ACCEPTATION DU CLIENT", M, y, 8, bold, MUTED);
-  y -= 30;
-  const fieldW = (W - 40) / 3;
-  ["Nom", "Signature", "Date"].forEach((label, i) => {
-    const x = M + i * (fieldW + 20);
-    page.drawLine({ start: { x, y }, end: { x: x + fieldW, y }, thickness: 0.7, color: INK });
-    text(page, label, x, y - 11, 8, regular, MUTED);
+  text("CONDITIONS", L + 10, yc, 9.3, bold);
+  yc -= 14;
+  QUOTE_CONDITIONS.forEach((condition, i) => {
+    for (const line of wrap(`• ${condition}`, i === 0 ? bold : regular, 8, 250)) {
+      text(line, L + 10, yc, 8, i === 0 ? bold : regular, SMALL);
+      yc -= 10;
+    }
   });
-  y -= 30;
-  text(page, "Pour accepter, signez et retournez cette soumission par courriel.", M, y, 9, bold, INK);
+  yc -= 4;
+  const linkLabel = input.model.key === "perkins-20-ouverte" ? "Modèles Perkins et photos" : "Voir la fiche et les photos en ligne";
+  text(linkLabel, L + 10, yc, 8, regular, NAVY);
+  const linkW = regular.widthOfTextAtSize(linkLabel, 8);
+  page.drawLine({ start: { x: L + 10, y: yc - 1.5 }, end: { x: L + 10 + linkW, y: yc - 1.5 }, thickness: 0.4, color: NAVY });
+  addLink(doc, page, input.model.url, L + 10, yc - 3, linkW, 11);
 
-  // 8. Pied de page.
-  page.drawLine({ start: { x: M, y: 46 }, end: { x: M + W, y: 46 }, thickness: 0.5, color: LINE });
-  const footerW = regular.widthOfTextAtSize(SUPPLIER.footer, 7.5);
-  text(page, SUPPLIER.footer, M + (W - footerW) / 2, 34, 7.5, regular, MUTED);
+  const tx = R - 262;
+  let yt = y;
+  const sumRow = (label: string, value: string) => {
+    text(label, tx + 6, yt, 9.3);
+    right(value, R - 6, yt, 9.3);
+    yt -= 18;
+  };
+  sumRow("Sous-total", formatMoney(totals.subtotal));
+  sumRow("TPS (5 %)", formatMoney(totals.tps));
+  sumRow("TVQ (9,975 %)", formatMoney(totals.tvq));
+  page.drawRectangle({ x: tx, y: yt - 6, width: 262, height: 20, color: NAVY });
+  text("TOTAL CAD", tx + 6, yt, 9.3, bold, WHITE);
+  right(formatMoney(totals.total), R - 6, yt, 9.3, bold, WHITE);
+  yt -= 26;
+  page.drawRectangle({ x: tx, y: yt - 9, width: 262, height: 26, color: DEPOSIT });
+  text("DÉPÔT REQUIS (30 %)", tx + 6, yt, 9.3, bold, WHITE);
+  right(formatMoney(totals.deposit), R - 6, yt, 9.3, bold, WHITE);
+  y = Math.min(yt - 30, yc - 24);
+
+  // Acceptation du client.
+  const boxTop = y + 12;
+  const boxH = 62;
+  page.drawRectangle({ x: L, y: boxTop - boxH, width: W, height: boxH, borderColor: LINE, borderWidth: 0.6 });
+  text("ACCEPTATION DU CLIENT", L + 10, boxTop - 16, 9.3, bold);
+  text("Nom :", L + 10, boxTop - 32, 8, regular, SMALL);
+  text("Signature :", L + 210, boxTop - 32, 8, regular, SMALL);
+  text("Date :", L + 410, boxTop - 32, 8, regular, SMALL);
+  hline(boxTop - boxH + 8, L + 10, R - 10, 0.6, INK);
+  y = boxTop - boxH - 16;
+  text("Pour accepter, signez et retournez cette soumission par courriel.", L, y, 8, regular, SMALL);
+
+  // Pied de page.
+  hline(50);
+  text(SUPPLIER.footer, L, 38, 7.5);
+  text("Solution NRJ - Soumission commerciale", L, 25, 7.2);
+  right("Page 1", R, 25, 7.2);
 
   return doc.save();
 }

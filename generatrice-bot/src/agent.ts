@@ -4,10 +4,10 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { systemPrompt } from "./business.ts";
-import { findModel, MODEL_KEYS } from "./catalogue.ts";
+import { findModel, MODEL_KEYS, QUOTABLE_KEYS } from "./catalogue.ts";
 import { emptyLead, mergeLead, missingFields, normalizePhone, type Lead, type LeadUpdate } from "./leads.ts";
 import { descriptionRows, formatMoney } from "./quote-pdf.ts";
-import { isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
+import { ExistingContactError, isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
 
 /** Historique conservé entre deux messages : uniquement le texte échangé. */
 export interface Turn {
@@ -71,12 +71,12 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "send_quote",
     description:
-      "Génère la soumission officielle en PDF (numéro S-AAAA-NNNN) et l'envoie par courriel au client, avec copie à l'équipe. À appeler UNIQUEMENT après avoir récapitulé la soumission au client et obtenu son accord explicite. Ne fonctionne que pour un modèle du catalogue avec un prix.",
+      `Génère la soumission officielle en PDF (numéro S-AAAA-NNNN), l'inscrit dans HubSpot et l'envoie par courriel au client, avec copie à l'équipe. À appeler UNIQUEMENT après avoir récapitulé la soumission au client et obtenu son accord explicite. Modèles permis : ${QUOTABLE_KEYS.join(", ")}.`,
     strict: true,
     input_schema: {
       type: "object",
       properties: {
-        model_key: { type: "string", enum: MODEL_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
+        model_key: { type: "string", enum: QUOTABLE_KEYS, description: "Clé du modèle, entre crochets dans le catalogue." },
         full_name: { type: "string", description: "Nom complet du client." },
         company: nullable("string", "Entreprise, s'il y a lieu."),
         email: { type: "string", description: "Courriel où envoyer la soumission, confirmé par le client." },
@@ -167,8 +167,8 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       if (args.client_confirmed !== true) {
         return { isError: true, content: "Le client n'a pas confirmé. Récapitule la soumission et attends son accord explicite avant de rappeler send_quote." };
       }
-      if (model.priceCad === null) {
-        return { isError: true, content: "Ce modèle est « sur demande » : pas de soumission automatique. Enregistre le client avec save_lead et dis-lui qu'un conseiller lui prépare la soumission." };
+      if (model.priceCad === null || !model.quotable) {
+        return { isError: true, content: "Pas de soumission automatique pour ce modèle. Enregistre le client avec save_lead et dis-lui qu'un conseiller lui prépare la soumission." };
       }
       const email = String(args.email).trim().toLowerCase();
       const fullName = String(args.full_name).trim();
@@ -216,6 +216,13 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
           }),
         };
       } catch (error) {
+        if (error instanceof ExistingContactError) {
+          state.transferReason = `Courriel déjà dans HubSpot (contact ${error.contactId}) : soumission ${model.name} à vérifier pour éviter un doublon`;
+          return {
+            isError: true,
+            content: "Ce courriel correspond à un dossier client existant : aucune soumission n'a été envoyée. Dis au client que son courriel correspond à un dossier existant et que notre équipe vérifie sa demande pour éviter un doublon, puis qu'un membre de l'équipe lui répond ici.",
+          };
+        }
         console.error("send_quote", error);
         state.lead = { ...state.lead, notes: [state.lead.notes, `Échec d'envoi automatique de soumission (${model.name})`].filter(Boolean).join(" — ") };
         return {

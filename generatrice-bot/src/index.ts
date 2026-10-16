@@ -20,6 +20,24 @@ export interface Env extends GuardEnv {
   QUOTE_WRITES_ENABLED?: string;
   QUOTATION_EMAIL_ENABLED?: string;
   RESEND_API_KEY?: string;
+  HUBSPOT_ACCESS_TOKEN?: string;
+  HUBSPOT_WRITES_ENABLED?: string;
+}
+
+/**
+ * Classes Durable Object de l'ancien service Messenger (ChatGPT). Le Worker
+ * garde le même nom ; ces coquilles vides évitent une migration qui
+ * effacerait leurs données. Elles ne sont plus utilisées.
+ */
+export class Conversation {
+  async fetch(): Promise<Response> {
+    return new Response("Gone", { status: 410 });
+  }
+}
+export class MailGate {
+  async fetch(): Promise<Response> {
+    return new Response("Gone", { status: 410 });
+  }
 }
 
 // Nombre de messages gardés par conversation, et durée de cette mémoire.

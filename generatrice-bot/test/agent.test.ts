@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runAgent } from "../src/agent.ts";
 import { findModel } from "../src/catalogue.ts";
+import { fakeBackends, quoteEnv } from "./helpers.ts";
 
 // Simule l'API Claude : renvoie les réponses prévues dans l'ordre et garde les requêtes reçues.
 function fakeClaude(responses: object[]) {
@@ -73,33 +74,42 @@ test("refus de sécurité : message poli, pas d'exception", async () => {
 });
 
 test("send_quote refusé sans confirmation explicite, puis envoyé après", async () => {
-  const quoteEnv = { QUOTE_REGISTER_URL: "https://registre.test", QUOTE_REGISTER_PASSWORD: "x", QUOTE_WRITES_ENABLED: "true", QUOTATION_EMAIL_ENABLED: "true", RESEND_API_KEY: "re_x" };
   const input = { model_key: "perkins-40", full_name: "Julie Roy", company: "Ferme Roy", email: "julie@example.com", phone: "450 555-0000", address: null, voltage: null, quantity: 1 };
   const claudeResponses = [
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { ...input, client_confirmed: false } }] },
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "send_quote", input: { ...input, client_confirmed: true } }] },
-    { stop_reason: "end_turn", content: [{ type: "text", text: "C'est envoyé! Votre soumission S-2026-0050 est en route. Quand souhaitez-vous l'installation?" }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "C'est envoyé! Quand souhaitez-vous l'installation?" }] },
   ];
   const claudeRequests: any[] = [];
+  const backends = fakeBackends();
   const fakeFetch = (async (url: string, init: RequestInit) => {
     if (String(url).includes("anthropic")) {
       claudeRequests.push(JSON.parse(String(init.body)));
       const body = { id: "m", type: "message", role: "assistant", model: "claude-opus-5-5", stop_details: null, usage: { input_tokens: 1, output_tokens: 1 }, ...claudeResponses[claudeRequests.length - 1] };
       return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
     }
-    if (url.endsWith("/api/login")) return new Response("{}", { headers: { "set-cookie": "nrj_session=abc" } });
-    if (url.endsWith("/api/clients")) return Response.json({});
-    if (url.endsWith("/api/quotes")) return Response.json({ id: 50, number: "S-2026-0050", revision: 1 });
-    return Response.json({ id: "email_1" });
+    return backends.fetchImpl(url, init);
   }) as unknown as typeof fetch;
 
   const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui, envoyez" }], lead: null, fetch: fakeFetch, quoteEnv });
   assert.equal(claudeRequests[1].messages.at(-1).content[0].is_error, true);
-  assert.equal(result.quote?.number, "S-2026-0050");
+  assert.equal(result.quote?.number, "S-2026-0042");
   assert.equal(result.quote?.total, 33342.75);
   assert.equal(result.lead?.email, "julie@example.com");
-  assert.match(result.lead?.notes ?? "", /S-2026-0050/);
+  assert.match(result.lead?.notes ?? "", /S-2026-0042/);
   assert.equal(findModel("perkins-40")?.priceCad, 29000);
+});
+
+test("send_quote avec un courriel déjà dans HubSpot : transfert à l'équipe", async () => {
+  const backends = fakeBackends({ existingContact: true });
+  const claude = fakeClaude([
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: null, address: null, voltage: null, quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "Votre courriel correspond à un dossier existant. Quel est le meilleur moment pour vous joindre?" }] },
+  ]);
+  const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv });
+  assert.equal(result.quote, null);
+  assert.match(result.transferReason ?? "", /HubSpot/);
 });
 
 test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé, le client est enregistré", async () => {
