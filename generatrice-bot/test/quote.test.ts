@@ -125,7 +125,9 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /ne demande pas l'usage/);
   assert.doesNotMatch(systemPrompt(), /électricien certifié/);
   assert.match(systemPrompt(), /faq\/#maison-puissance/);
-  assert.match(systemPrompt(), /N'exige jamais le DMW/);
+  assert.match(systemPrompt(), /Le DMW est facultatif/);
+  assert.match(systemPrompt(), /blogue\/dmw-compteur-generatrice\//);
+  assert.match(systemPrompt(), /ne dis jamais « il vous faut X kW »/);
   assert.match(systemPrompt(), /si ce budget lui convient/);
   assert.doesNotMatch(systemPrompt(), /Chauffage électrique ou non/);
   assert.doesNotMatch(systemPrompt(), /plus compacte que la 60 kW/);
