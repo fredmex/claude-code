@@ -1,11 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runAgent, type Turn } from "./agent.ts";
-import { emptyLead, getLead, leadsToCsv, listLeads, notifyTeam, putLead } from "./leads.ts";
+import { emptyLead, leadsToCsv, listLeads, notifyTeam, putLead, type Lead } from "./leads.ts";
 import { AD_GREETING, customerGate, DAILY_REPLY_LIMIT, stopRequested, type GuardEnv } from "./guards.ts";
 import { BOT_METADATA, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
 
 export interface Env extends GuardEnv {
   BOT_STATE: KVNamespace;
+  CONVERSATIONS: DurableObjectNamespace;
   ANTHROPIC_API_KEY: string;
   META_APP_SECRET: string;
   META_PAGE_ACCESS_TOKEN: string;
@@ -24,16 +25,87 @@ export interface Env extends GuardEnv {
   HUBSPOT_WRITES_ENABLED?: string;
 }
 
-/**
- * Classes Durable Object de l'ancien service Messenger (ChatGPT). Le Worker
- * garde le même nom ; ces coquilles vides évitent une migration qui
- * effacerait leurs données. Elles ne sont plus utilisées.
- */
-export class Conversation {
-  async fetch(): Promise<Response> {
-    return new Response("Gone", { status: 410 });
+/** État d'une conversation : lecture et écriture immédiatement cohérentes. */
+export interface Store {
+  get<T>(key: string): Promise<T | null>;
+  put(key: string, value: unknown, ttlSeconds?: number): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+/** Stockage du Durable Object, avec expiration gérée à la lecture. */
+export class DurableStore implements Store {
+  private storage: DurableObjectStorage;
+  constructor(storage: DurableObjectStorage) {
+    this.storage = storage;
+  }
+  async get<T>(key: string): Promise<T | null> {
+    const record = await this.storage.get<{ v: T; exp: number | null }>(key);
+    if (!record) return null;
+    if (record.exp !== null && record.exp < Date.now()) {
+      await this.storage.delete(key);
+      return null;
+    }
+    return record.v;
+  }
+  async put(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+    await this.storage.put(key, { v: value, exp: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
+  }
+  async delete(key: string): Promise<void> {
+    await this.storage.delete(key);
   }
 }
+
+/**
+ * Une instance par client (nom « claude:<psid> ») : les messages d'un même client
+ * sont traités un à un, dans l'ordre, avec une mémoire toujours à jour. Le
+ * traitement se fait dans alarm(), sans la limite de 30 s de waitUntil().
+ * Le nom de classe est repris de l'ancien bot ; ses anciennes instances
+ * (« <page>:<psid> ») ne sont jamais lues ni modifiées.
+ */
+export class Conversation {
+  private ctx: DurableObjectState;
+  private env: Env;
+  private store: DurableStore;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    this.ctx = ctx;
+    this.env = env;
+    this.store = new DurableStore(ctx.storage);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/event") {
+      const event = (await request.json()) as MessagingEvent;
+      const queue = ((await this.ctx.storage.get<MessagingEvent[]>("queue")) ?? []).concat(event);
+      await this.ctx.storage.put("queue", queue);
+      await this.ctx.storage.setAlarm(Date.now());
+      return new Response("queued");
+    }
+    if (url.pathname === "/clear") {
+      await clearClientState(this.store, url.searchParams.get("reset") === "1");
+      return new Response("cleared");
+    }
+    return new Response("Not found", { status: 404 });
+  }
+
+  async alarm(): Promise<void> {
+    for (;;) {
+      const queue = (await this.ctx.storage.get<MessagingEvent[]>("queue")) ?? [];
+      const event = queue.shift();
+      if (!event) return;
+      await this.ctx.storage.put("queue", queue);
+      // Une erreur ne doit pas relancer l'alarme : le client recevrait deux réponses.
+      await handleEvent(event, this.env, this.store).catch(logError);
+    }
+  }
+}
+
+export function conversationFor(env: Env, psid: string): DurableObjectStub {
+  return env.CONVERSATIONS.get(env.CONVERSATIONS.idFromName(`claude:${psid}`));
+}
+
+/** Ancienne classe de l'ancien bot, conservée vide pour ne pas migrer ses données. */
 export class MailGate {
   async fetch(): Promise<Response> {
     return new Response("Gone", { status: 410 });
@@ -45,7 +117,7 @@ const MAX_HISTORY_TURNS = 30;
 const HISTORY_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/") return new Response("Bot Messenger actif.", { status: 200 });
@@ -74,7 +146,6 @@ export default {
     const body = JSON.parse(rawBody) as WebhookBody;
     if (body.object !== "page") return new Response("Not found", { status: 404 });
 
-    // Meta attend un 200 rapidement, sinon il renvoie l'événement : on traite en arrière-plan.
     // Seulement la Page Solution NRJ, si son identifiant est configuré.
     const entries = body.entry ?? [];
     const events = entries
@@ -83,7 +154,18 @@ export default {
     if (events.length === 0) {
       console.log(`Webhook sans message traitable : ${JSON.stringify(entries.map((e) => ({ page: String(e.id) === env.META_PAGE_ID ? "ok" : "autre", keys: Object.keys(e) })))}`);
     }
-    ctx.waitUntil(Promise.all(events.map((event) => handleEvent(event, env).catch(logError))));
+    // Chaque événement va dans la file du client concerné (le destinataire, pour un écho).
+    try {
+      for (const event of events) {
+        const psid = event.message?.is_echo ? event.recipient.id : event.sender.id;
+        if (!/^\d{5,30}$/.test(psid ?? "")) continue;
+        const res = await conversationFor(env, psid).fetch("https://conversation/event", { method: "POST", body: JSON.stringify(event) });
+        if (!res.ok) throw new Error(`queue_${res.status}`);
+      }
+    } catch (error) {
+      logError(error);
+      return new Response("Retry later", { status: 503 }); // Meta renverra l'événement
+    }
     return new Response("EVENT_RECEIVED", { status: 200 });
   },
 } satisfies ExportedHandler<Env>;
@@ -109,28 +191,22 @@ async function exportLeads(request: Request, url: URL, env: Env): Promise<Respon
  * Relance le bot pour un client (retire pause, arrêt et compteur du jour) :
  * POST /admin/resume?psid=…[&reset=1]  avec  Authorization: Bearer ADMIN_TOKEN.
  * reset=1 efface aussi l'historique de conversation et la fiche du client.
- * Sans psid : liste les clients en pause ou arrêtés.
  */
 async function resumeBot(request: Request, url: URL, env: Env): Promise<Response> {
   const key = request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? url.searchParams.get("key");
   if (!env.ADMIN_TOKEN || !key || !(await timingSafeEqual(key, env.ADMIN_TOKEN))) return new Response("Unauthorized", { status: 401 });
   const psid = url.searchParams.get("psid");
-  if (!psid) {
-    const [paused, stopped] = await Promise.all([env.BOT_STATE.list({ prefix: "pause:" }), env.BOT_STATE.list({ prefix: "stopped:" })]);
-    return Response.json({ paused: paused.keys.map((k) => k.name.slice(6)), stopped: stopped.keys.map((k) => k.name.slice(8)) });
-  }
-  if (request.method !== "POST" || !/^\d{5,30}$/.test(psid)) return new Response("Bad request", { status: 400 });
+  if (request.method !== "POST" || !psid || !/^\d{5,30}$/.test(psid)) return new Response("Bad request", { status: 400 });
   const reset = url.searchParams.get("reset") === "1";
-  await clearClientState(env, psid, reset);
+  await conversationFor(env, psid).fetch(`https://conversation/clear?reset=${reset ? 1 : 0}`, { method: "POST" });
   return Response.json({ resumed: psid, reset });
 }
 
 /** Retire pause, arrêt et compteur du jour ; avec reset, efface aussi l'historique et la fiche. */
-async function clearClientState(env: Env, psid: string, reset: boolean): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10);
-  const keys = [`pause:${psid}`, `stopped:${psid}`, `count:${psid}:${today}`];
-  if (reset) keys.push(`history:${psid}`, `lead:${psid}`);
-  await Promise.all(keys.map((k) => env.BOT_STATE.delete(k)));
+async function clearClientState(store: Store, reset: boolean): Promise<void> {
+  const keys = ["pause", "stopped", `count:${new Date().toISOString().slice(0, 10)}`];
+  if (reset) keys.push("history", "lead");
+  await Promise.all(keys.map((k) => store.delete(k)));
 }
 
 /** Les 4 derniers chiffres suffisent pour suivre un client dans les journaux. */
@@ -150,7 +226,7 @@ function pauseSeconds(env: Env): number {
   return Math.max(1, Number.isFinite(hours) && hours > 0 ? hours : 24) * 3600;
 }
 
-async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
+export async function handleEvent(event: MessagingEvent, env: Env, store: Store): Promise<void> {
   const message = event.message;
 
   // Un message envoyé par la Page sans la balise du bot, c'est un humain qui
@@ -158,7 +234,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   // Le message d'accueil des publicités Messenger est envoyé par Meta : il ne compte pas.
   if (message?.is_echo) {
     if (!String(message.metadata ?? "").startsWith(BOT_METADATA) && message.text !== AD_GREETING) {
-      await env.BOT_STATE.put(`pause:${event.recipient.id}`, "humain", { expirationTtl: pauseSeconds(env) });
+      await store.put("pause", "humain", pauseSeconds(env));
       console.log(`Pause pour ${tail(event.recipient.id)} : un humain a répondu`);
     }
     return;
@@ -169,12 +245,12 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
 
   if (message) {
     // Meta peut livrer deux fois le même message : on ignore les doublons.
-    const seenKey = `seen:${message.mid}`;
-    if (await env.BOT_STATE.get(seenKey)) {
+    const seen = (await store.get<string[]>("seen")) ?? [];
+    if (seen.includes(message.mid)) {
       console.log(`Doublon ignoré pour ${tail(psid)}`);
       return;
     }
-    await env.BOT_STATE.put(seenKey, "1", { expirationTtl: 60 * 60 });
+    await store.put("seen", seen.concat(message.mid).slice(-200));
   } else if (!event.postback) {
     return; // accusés de lecture et de réception
   }
@@ -188,40 +264,40 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
 
   // Test : Frederic remet sa conversation à zéro en écrivant « #reset ».
   if (gate.reason === "owner_test" && message?.text?.trim().toLowerCase() === "#reset") {
-    await clearClientState(env, psid, true);
+    await clearClientState(store, true);
     await sendText(env.META_PAGE_ACCESS_TOKEN, psid, "Conversation de test remise à zéro (historique, fiche et pause effacés).");
     console.log(`Remise à zéro du test pour ${tail(psid)}`);
     return;
   }
 
   // Le client a demandé qu'on ne le contacte plus.
-  if (await env.BOT_STATE.get(`stopped:${psid}`)) {
+  if (await store.get("stopped")) {
     console.log(`Pas de réponse à ${tail(psid)} : le client a demandé l'arrêt`);
     return;
   }
   if (message?.text && stopRequested(message.text)) {
-    await env.BOT_STATE.put(`stopped:${psid}`, "1", { expirationTtl: 60 * 60 * 24 * 365 });
+    await store.put("stopped", "1", 60 * 60 * 24 * 365);
     console.log(`Arrêt demandé par ${tail(psid)}`);
     return;
   }
 
   // Un membre de l'équipe a la main : le bot ne répond pas.
-  const pause = await env.BOT_STATE.get(`pause:${psid}`);
+  const pause = await store.get<string>("pause");
   if (pause) {
     console.log(`Pas de réponse à ${tail(psid)} : en pause (${pause})`);
     return;
   }
 
   // Au-delà de 30 réponses dans la journée, on laisse la conversation à l'équipe.
-  const countKey = `count:${psid}:${new Date().toISOString().slice(0, 10)}`;
-  const count = Number((await env.BOT_STATE.get(countKey)) ?? 0);
+  const countKey = `count:${new Date().toISOString().slice(0, 10)}`;
+  const count = (await store.get<number>(countKey)) ?? 0;
   // Le compte de test de Frederic n'a pas de limite : elle protège les vrais clients.
   if (count >= DAILY_REPLY_LIMIT && gate.reason !== "owner_test") {
-    await env.BOT_STATE.put(`pause:${psid}`, "limite", { expirationTtl: pauseSeconds(env) });
+    await store.put("pause", "limite", pauseSeconds(env));
     console.log(`Pause pour ${tail(psid)} : limite de ${DAILY_REPLY_LIMIT} réponses atteinte`);
     return;
   }
-  await env.BOT_STATE.put(countKey, String(count + 1), { expirationTtl: 60 * 60 * 48 });
+  await store.put(countKey, count + 1, 60 * 60 * 48);
 
   // Ce que le client a envoyé, pour Claude et pour l'historique.
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
@@ -253,8 +329,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   await sendAction(token, psid, "mark_seen");
   await sendAction(token, psid, "typing_on");
 
-  const historyKey = `history:${psid}`;
-  const history = (await env.BOT_STATE.get<Turn[]>(historyKey, "json")) ?? [];
+  const history = (await store.get<Turn[]>("history")) ?? [];
   const now = new Date().toISOString();
 
   let result;
@@ -264,7 +339,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
       model: env.CLAUDE_MODEL,
       history,
       userContent: content,
-      lead: await getLead(env.BOT_STATE, psid),
+      lead: await store.get<Lead>("lead"),
       psid,
       now,
       quoteEnv: env,
@@ -283,12 +358,16 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
 
   let lead = result.lead;
   if (result.transferReason) {
-    await env.BOT_STATE.put(`pause:${psid}`, "transfert", { expirationTtl: pauseSeconds(env) });
+    await store.put("pause", "transfert", pauseSeconds(env));
     console.log(`Pause pour ${tail(psid)} : transfert (${result.transferReason})`);
     const base = lead ?? emptyLead(psid, now);
     lead = { ...base, transferred: true, notes: [base.notes, `Transfert : ${result.transferReason}`].filter(Boolean).join(" — ") };
   }
-  if (lead) await putLead(env.BOT_STATE, lead);
+  if (lead) {
+    await store.put("lead", lead);
+    // Copie pour l'export CSV (/leads) : un léger délai d'affichage y est sans importance.
+    await putLead(env.BOT_STATE, lead).catch(logError);
+  }
 
   const notify = { webhookUrl: env.NOTIFY_WEBHOOK_URL, resendApiKey: env.RESEND_API_KEY, emailEnabled: env.QUOTATION_EMAIL_ENABLED === "true" };
   const lastMid = message?.mid ?? `postback-${event.timestamp}`;
@@ -305,7 +384,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
     .concat({ role: "user", text: historyNotes.join("\n") }, { role: "assistant", text: result.reply })
     .slice(-MAX_HISTORY_TURNS);
   while (trimmed.length > 0 && trimmed[0].role !== "user") trimmed = trimmed.slice(1);
-  await env.BOT_STATE.put(historyKey, JSON.stringify(trimmed), { expirationTtl: HISTORY_TTL_SECONDS });
+  await store.put("history", trimmed, HISTORY_TTL_SECONDS);
 }
 
 function logError(error: unknown): void {
