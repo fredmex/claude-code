@@ -16,12 +16,10 @@ QUOTE_REGISTER_URL = "https://solution-nrj-soumissions.monscorbu.workers.dev"
 QUOTE_WRITES_ENABLED = "false"
 QUOTATION_EMAIL_ENABLED = "false"
 
-# Mémoire des conversations. Créez l'espace avec :
-#   npx wrangler kv namespace create BOT_STATE
-# puis collez l'identifiant affiché ci-dessous.
+# Mémoire des conversations (espace KV « solution-nrj-messenger-state », déjà créé).
 [[kv_namespaces]]
 binding = "BOT_STATE"
-id = "REMPLACEZ_PAR_L_ID_DU_NAMESPACE_KV"
+id = "ecf9cef5e0a14f4cbe57b636398bbcb0"
 
 # Secrets (jamais dans ce fichier) — voir le README, étape 5 :
 #   npx wrangler secret put ANTHROPIC_API_KEY
