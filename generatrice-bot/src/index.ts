@@ -50,6 +50,7 @@ export default {
 
     if (url.pathname === "/") return new Response("Bot Messenger actif.", { status: 200 });
     if (url.pathname === "/leads") return exportLeads(request, url, env);
+    if (url.pathname === "/admin/resume") return resumeBot(request, url, env);
     if (url.pathname !== "/webhook") return new Response("Not found", { status: 404 });
 
     // Vérification de l'URL de rappel par Meta.
@@ -75,9 +76,13 @@ export default {
 
     // Meta attend un 200 rapidement, sinon il renvoie l'événement : on traite en arrière-plan.
     // Seulement la Page Solution NRJ, si son identifiant est configuré.
-    const events = (body.entry ?? [])
+    const entries = body.entry ?? [];
+    const events = entries
       .filter((entry) => !env.META_PAGE_ID || String(entry.id) === env.META_PAGE_ID)
       .flatMap((entry) => entry.messaging ?? []);
+    if (events.length === 0) {
+      console.log(`Webhook sans message traitable : ${JSON.stringify(entries.map((e) => ({ page: String(e.id) === env.META_PAGE_ID ? "ok" : "autre", keys: Object.keys(e) })))}`);
+    }
     ctx.waitUntil(Promise.all(events.map((event) => handleEvent(event, env).catch(logError))));
     return new Response("EVENT_RECEIVED", { status: 200 });
   },
@@ -99,6 +104,32 @@ async function exportLeads(request: Request, url: URL, env: Env): Promise<Respon
     },
   });
 }
+
+/**
+ * Relance le bot pour un client (retire pause, arrêt et compteur du jour) :
+ * POST /admin/resume?psid=…  avec  Authorization: Bearer ADMIN_TOKEN.
+ * Sans psid : liste les clients en pause ou arrêtés.
+ */
+async function resumeBot(request: Request, url: URL, env: Env): Promise<Response> {
+  const key = request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? url.searchParams.get("key");
+  if (!env.ADMIN_TOKEN || !key || !(await timingSafeEqual(key, env.ADMIN_TOKEN))) return new Response("Unauthorized", { status: 401 });
+  const psid = url.searchParams.get("psid");
+  if (!psid) {
+    const [paused, stopped] = await Promise.all([env.BOT_STATE.list({ prefix: "pause:" }), env.BOT_STATE.list({ prefix: "stopped:" })]);
+    return Response.json({ paused: paused.keys.map((k) => k.name.slice(6)), stopped: stopped.keys.map((k) => k.name.slice(8)) });
+  }
+  if (request.method !== "POST" || !/^\d{5,30}$/.test(psid)) return new Response("Bad request", { status: 400 });
+  const today = new Date().toISOString().slice(0, 10);
+  await Promise.all([
+    env.BOT_STATE.delete(`pause:${psid}`),
+    env.BOT_STATE.delete(`stopped:${psid}`),
+    env.BOT_STATE.delete(`count:${psid}:${today}`),
+  ]);
+  return Response.json({ resumed: psid });
+}
+
+/** Les 4 derniers chiffres suffisent pour suivre un client dans les journaux. */
+const tail = (psid: string) => `…${psid.slice(-4)}`;
 
 async function timingSafeEqual(a: string, b: string): Promise<boolean> {
   const [ha, hb] = await Promise.all(
@@ -123,6 +154,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   if (message?.is_echo) {
     if (!String(message.metadata ?? "").startsWith(BOT_METADATA) && message.text !== AD_GREETING) {
       await env.BOT_STATE.put(`pause:${event.recipient.id}`, "humain", { expirationTtl: pauseSeconds(env) });
+      console.log(`Pause pour ${tail(event.recipient.id)} : un humain a répondu`);
     }
     return;
   }
@@ -133,34 +165,46 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   if (message) {
     // Meta peut livrer deux fois le même message : on ignore les doublons.
     const seenKey = `seen:${message.mid}`;
-    if (await env.BOT_STATE.get(seenKey)) return;
+    if (await env.BOT_STATE.get(seenKey)) {
+      console.log(`Doublon ignoré pour ${tail(psid)}`);
+      return;
+    }
     await env.BOT_STATE.put(seenKey, "1", { expirationTtl: 60 * 60 });
   } else if (!event.postback) {
-    return;
+    return; // accusés de lecture et de réception
   }
 
   // Le bot n'est pas activé, le client est un client existant, ou la fenêtre de 24 h est passée.
   const gate = customerGate(env, psid, Number(event.timestamp));
   if (!gate.allowed) {
-    console.log(`Pas de réponse à ${psid} : ${gate.reason}`);
+    console.log(`Pas de réponse à ${tail(psid)} : ${gate.reason}`);
     return;
   }
 
   // Le client a demandé qu'on ne le contacte plus.
-  if (await env.BOT_STATE.get(`stopped:${psid}`)) return;
+  if (await env.BOT_STATE.get(`stopped:${psid}`)) {
+    console.log(`Pas de réponse à ${tail(psid)} : le client a demandé l'arrêt`);
+    return;
+  }
   if (message?.text && stopRequested(message.text)) {
     await env.BOT_STATE.put(`stopped:${psid}`, "1", { expirationTtl: 60 * 60 * 24 * 365 });
+    console.log(`Arrêt demandé par ${tail(psid)}`);
     return;
   }
 
   // Un membre de l'équipe a la main : le bot ne répond pas.
-  if (await env.BOT_STATE.get(`pause:${psid}`)) return;
+  const pause = await env.BOT_STATE.get(`pause:${psid}`);
+  if (pause) {
+    console.log(`Pas de réponse à ${tail(psid)} : en pause (${pause})`);
+    return;
+  }
 
   // Au-delà de 30 réponses dans la journée, on laisse la conversation à l'équipe.
   const countKey = `count:${psid}:${new Date().toISOString().slice(0, 10)}`;
   const count = Number((await env.BOT_STATE.get(countKey)) ?? 0);
   if (count >= DAILY_REPLY_LIMIT) {
     await env.BOT_STATE.put(`pause:${psid}`, "limite", { expirationTtl: pauseSeconds(env) });
+    console.log(`Pause pour ${tail(psid)} : limite de ${DAILY_REPLY_LIMIT} réponses atteinte`);
     return;
   }
   await env.BOT_STATE.put(countKey, String(count + 1), { expirationTtl: 60 * 60 * 48 });
@@ -190,6 +234,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
     }
   }
   if (content.length === 0) return; // autocollant « j'aime » seul, etc.
+  console.log(`Réponse à ${tail(psid)} (${gate.reason ?? "client"})`);
 
   await sendAction(token, psid, "mark_seen");
   await sendAction(token, psid, "typing_on");
@@ -225,6 +270,7 @@ async function handleEvent(event: MessagingEvent, env: Env): Promise<void> {
   let lead = result.lead;
   if (result.transferReason) {
     await env.BOT_STATE.put(`pause:${psid}`, "transfert", { expirationTtl: pauseSeconds(env) });
+    console.log(`Pause pour ${tail(psid)} : transfert (${result.transferReason})`);
     const base = lead ?? emptyLead(psid, now);
     lead = { ...base, transferred: true, notes: [base.notes, `Transfert : ${result.transferReason}`].filter(Boolean).join(" — ") };
   }
