@@ -83,7 +83,7 @@ const TOOLS: Anthropic.Beta.BetaTool[] = [
         phone: nullable("string", "Téléphone du client."),
         address: nullable("string", "Adresse de facturation, si le client l'a donnée."),
         voltage: nullable("string", "Tension demandée, ex. « 120/240 V » ou « 600 V » ; null pour celle du catalogue."),
-        quantity: { type: "integer", description: "Nombre d'unités (1 par défaut)." },
+        quantity: { type: "integer", description: "Nombre d'unités : 1, sauf si le client a lui-même demandé plusieurs unités. Ne pose jamais la question." },
         client_confirmed: { type: "boolean", description: "true seulement si le client vient de confirmer explicitement le récapitulatif." },
       },
       required: ["model_key", "full_name", "company", "email", "phone", "address", "voltage", "quantity", "client_confirmed"],

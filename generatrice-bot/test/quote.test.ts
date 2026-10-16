@@ -109,4 +109,6 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /Ne demande jamais de planifier/);
   assert.doesNotMatch(systemPrompt(), /meilleur moment/);
   assert.match(systemPrompt(), /même si un envoi précédent a échoué/);
+  assert.match(systemPrompt(), /Ne demande jamais la quantité/);
+  assert.match(systemPrompt(), /monophasé ou triphasé/);
 });
