@@ -7,7 +7,6 @@ import { systemPrompt } from "./business.ts";
 import { findModel, MODEL_KEYS, QUOTABLE_KEYS } from "./catalogue.ts";
 import { emptyLead, mergeLead, missingFields, normalizePhone, type Lead, type LeadUpdate } from "./leads.ts";
 import { descriptionRows, formatMoney } from "./quote-pdf.ts";
-import { recordMessengerLead } from "./crm.ts";
 import { isEmail, quoteSendingEnabled, sendOfficialQuote, sendSpecSheet, type QuoteEnv, type QuoteResult } from "./quote-service.ts";
 
 /** Historique conservé entre deux messages : uniquement le texte échangé. */
@@ -79,7 +78,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "send_quote",
     description:
-      `Génère la soumission officielle en PDF (numéro S-AAAA-NNNN), l'enregistre pour le CRM et l'envoie par courriel au client, avec copie à l'équipe. À appeler UNIQUEMENT après avoir récapitulé la soumission au client et obtenu son accord explicite. Modèles permis : ${QUOTABLE_KEYS.join(", ")}.`,
+      `Génère la soumission officielle en PDF (numéro S-AAAA-NNNN) et l'envoie par courriel au client, avec copie à l'équipe. À appeler UNIQUEMENT après avoir récapitulé la soumission au client et obtenu son accord explicite. Modèles permis : ${QUOTABLE_KEYS.join(", ")}.`,
     strict: true,
     input_schema: {
       type: "object",
@@ -100,7 +99,7 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
   },
   {
     name: "email_spec_sheet",
-    description: "Envoie par courriel la fiche détaillée d'un modèle (caractéristiques, prix avant taxes, lien photos) et enregistre la demande pour le CRM. Aucun numéro de soumission.",
+    description: "Envoie par courriel la fiche détaillée d'un modèle (caractéristiques, prix avant taxes, lien photos). Aucun numéro de soumission.",
     strict: true,
     input_schema: {
       type: "object",
@@ -130,17 +129,6 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
     },
   },
 ];
-
-/** Colonne details de messenger_leads : tension, quantité, usage et notes du prospect. */
-function leadDetails(lead: Lead | null, voltage: string | null, quantity: number): string | null {
-  const parts = [
-    voltage ?? lead?.voltage ? `Tension : ${voltage ?? lead?.voltage}` : null,
-    quantity > 1 ? `Quantité : ${quantity}` : null,
-    lead?.usage ? `Usage : ${lead.usage}` : null,
-    lead?.notes ? `Notes : ${lead.notes}` : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(" — ").slice(0, 1000) : null;
-}
 
 interface ToolState {
   lead: Lead | null;
@@ -228,11 +216,6 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
           doFetch,
         );
         state.quote = { ...result, modelName: model.name, email };
-        await recordMessengerLead(
-          quoteEnv,
-          { event: "soumission", psid: input.psid, fullName, email, phone, company: (args.company as string | null) || null, address, model, quoteRef: result.number, details: leadDetails(state.lead, voltage, quantity) },
-          input.now,
-        ).catch((error) => console.error("dolibarr_soumission", error));
         state.lead = { ...state.lead, notes: [state.lead.notes, `Soumission ${result.number} envoyée (${model.name} × ${quantity})`].filter(Boolean).join(" — ") };
         return {
           content: JSON.stringify({
@@ -269,12 +252,6 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       }
       try {
         await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: specName, rows: descriptionRows(model, null) }, doFetch);
-        // Demande pour Dolibarr : une erreur ici n'empêche pas l'envoi déjà fait.
-        await recordMessengerLead(
-          quoteEnv,
-          { event: "fiche", psid: input.psid, fullName: specName, email, phone: specPhone, company: (args.company as string | null) || null, address: null, model, quoteRef: null, details: leadDetails(state.lead, null, 1) },
-          input.now,
-        ).catch((error) => console.error("dolibarr_fiche", error));
         return { content: JSON.stringify({ sent: true, email }) };
       } catch (error) {
         console.error("email_spec_sheet", error);

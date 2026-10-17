@@ -1,11 +1,10 @@
 // Soumission officielle : numéro réservé dans l'application « solution-nrj-soumissions »,
 // PDF au format approuvé, envoi par Resend depuis ventes@solutionnrj.com.
 import { QUOTE_CONDITIONS, type Model } from "./catalogue.ts";
-import type { LeadsEnv } from "./crm.ts";
 import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type QuoteClient } from "./quote-pdf.ts";
 
 
-export interface QuoteEnv extends LeadsEnv {
+export interface QuoteEnv {
   QUOTE_REGISTER_URL: string;
   /**
    * Liaison de service vers le Worker « solution-nrj-soumissions ». Obligatoire en
@@ -147,8 +146,8 @@ const html = (lines: string[]) =>
   "</div>";
 
 /**
- * Parcours complet : numéro du registre → PDF → courriel Resend (copie à l'équipe).
- * La demande est ensuite ajoutée pour Dolibarr par l'appelant (voir crm.ts).
+ * Parcours complet : numéro du registre → PDF → courriel Resend (copie cachée à l'équipe,
+ * qui l'archive dans Dolibarr). Le prospect reste dans BOT_STATE (lead:<psid>).
  */
 export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResult> {
   if (req.model.priceCad === null || !req.model.quotable) throw new Error("not_quotable");

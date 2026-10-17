@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runAgent } from "../src/agent.ts";
 import { findModel } from "../src/catalogue.ts";
-import { fakeBackends, fakeLeadsDb, leadRow, quoteEnv } from "./helpers.ts";
+import { fakeBackends, quoteEnv } from "./helpers.ts";
 
 // Simule l'API Claude : renvoie les réponses prévues dans l'ordre et garde les requêtes reçues.
 function fakeClaude(responses: object[]) {
@@ -100,52 +100,17 @@ test("send_quote refusé sans confirmation explicite, puis envoyé après", asyn
   assert.equal(findModel("perkins-40")?.priceCad, 29000);
 });
 
-test("send_quote : la soumission part et une ligne « soumission » est ajoutée pour Dolibarr", async () => {
-  const backends = fakeBackends();
-  const leads = fakeLeadsDb();
+test("send_quote : la soumission part sans appel HubSpot ni transfert", async () => {
+  const backends = fakeBackends(); // tout appel inattendu (HubSpot compris) lève une erreur
   const claude = fakeClaude([
-    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: "Roy inc.", email: "marc@example.com", phone: "514 555-1111", address: "45 rue Principale, Laval, H7N 1A1", voltage: "550 V", quantity: 2, client_confirmed: true } }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: "514 555-1111", address: "45 rue Principale, Laval, H7N 1A1", voltage: null, quantity: 1, client_confirmed: true } }] },
     { stop_reason: "end_turn", content: [{ type: "text", text: "Votre soumission S-2026-0042 a été envoyée." }] },
   ]);
   const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
-  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv: { ...quoteEnv, LEADS_DB: leads.db } });
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv });
   assert.equal(result.quote?.number, "S-2026-0042");
   assert.equal(result.transferReason, null);
-  assert.equal(leads.inserts.length, 1);
-  assert.match(leads.inserts[0].sql, /INSERT INTO messenger_leads/);
-  const row = leadRow(leads.inserts[0].values);
-  assert.equal(row.event, "soumission");
-  assert.equal(row.full_name, "Marc Roy");
-  assert.equal(row.email, "marc@example.com");
-  assert.equal(row.phone, "5145551111");
-  assert.equal(row.company, "Roy inc.");
-  assert.equal(row.address, "45 rue Principale, Laval, H7N 1A1");
-  assert.equal(row.power_kw, 10);
-  assert.equal(row.model_key, "perkins-10");
-  assert.equal(row.model_label, "Génératrice diesel Perkins 10 kW");
-  assert.equal(row.price_ht, 12500);
-  assert.equal(row.quote_ref, "S-2026-0042");
-  assert.match(String(row.details), /Tension : 550 V — Quantité : 2/);
-  assert.match(String(row.created_at), /^\d{4}-\d{2}-\d{2}T/);
-});
-
-test("échec de l'écriture D1 : la soumission est quand même confirmée, sans transfert", async () => {
-  const backends = fakeBackends();
-  const claude = fakeClaude([
-    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: null, email: "marc@example.com", phone: null, address: null, voltage: null, quantity: 1, client_confirmed: true } }] },
-    { stop_reason: "end_turn", content: [{ type: "text", text: "Envoyée." }] },
-  ]);
-  const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
-  const error = console.error;
-  console.error = () => {};
-  try {
-    const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead: null, fetch: fetchImpl, quoteEnv: { ...quoteEnv, LEADS_DB: fakeLeadsDb({ fail: true }).db } });
-    assert.equal(result.quote?.number, "S-2026-0042");
-    assert.equal(result.transferReason, null);
-    assert.match(claude.requests[1].messages.at(-1).content[0].content, /"sent":true/);
-  } finally {
-    console.error = error;
-  }
+  assert.equal(result.lead?.email, "marc@example.com");
 });
 
 test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé, le client est enregistré", async () => {
@@ -170,23 +135,18 @@ test("send_quote sans adresse ni téléphone : la soumission part quand même", 
   assert.equal(result.quote?.number, "S-2026-0042");
 });
 
-test("fiche par courriel : une ligne « fiche » est ajoutée pour Dolibarr avec nom, entreprise et téléphone", async () => {
+test("fiche par courriel : envoyée sans appel HubSpot, nom, entreprise et téléphone dans la fiche prospect", async () => {
   const backends = fakeBackends();
-  const leads = fakeLeadsDb();
   const claude = fakeClaude([
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "email_spec_sheet", input: { model_key: "perkins-40", email: "julie@example.com", name: "Julie Roy", company: "Ferme Roy", phone: "450 555-0000" } }] },
     { stop_reason: "end_turn", content: [{ type: "text", text: "La fiche est partie." }] },
   ]);
   const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
-  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "Julie Roy, Ferme Roy, julie@example.com, 450 555-0000" }], lead: null, fetch: fetchImpl, quoteEnv: { ...quoteEnv, LEADS_DB: leads.db } });
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "Julie Roy, Ferme Roy, julie@example.com, 450 555-0000" }], lead: null, fetch: fetchImpl, quoteEnv });
   assert.ok(backends.calls.some((c) => c.url === "https://api.resend.com/emails"));
-  assert.equal(leads.inserts.length, 1);
-  const row = leadRow(leads.inserts[0].values);
-  assert.deepEqual(
-    { event: row.event, full_name: row.full_name, email: row.email, phone: row.phone, company: row.company, address: row.address, model_key: row.model_key, price_ht: row.price_ht, quote_ref: row.quote_ref },
-    { event: "fiche", full_name: "Julie Roy", email: "julie@example.com", phone: "4505550000", company: "Ferme Roy", address: null, model_key: "perkins-40", price_ht: 29000, quote_ref: null },
-  );
+  assert.equal(result.lead?.name, "Julie Roy");
   assert.equal(result.lead?.company, "Ferme Roy");
+  assert.equal(result.lead?.phone, "4505550000");
 });
 
 test("outils stricts : au plus 16 champs à type union (limite de l'API Claude)", async () => {

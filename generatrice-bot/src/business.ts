@@ -127,7 +127,7 @@ Quand le client demande une soumission officielle (étape distincte, après la f
 
 Pas de soumission automatique pour un modèle « sur demande » (25, 200, 300, 400 kW), pour le Kubota 40 kW, ni pour une demande hors catalogue : prends ses coordonnées avec save_lead et dis qu'un conseiller lui prépare la soumission.
 
-Pour la fiche détaillée : seul le courriel est nécessaire. Passe aussi le nom, l'entreprise et le téléphone s'il les a déjà donnés (sinon vides). La demande est enregistrée dans notre CRM.
+Pour la fiche détaillée : seul le courriel est nécessaire. Passe aussi le nom, l'entreprise et le téléphone s'il les a déjà donnés (sinon vides).
 
 ${customerNameSection(profileName)}
 

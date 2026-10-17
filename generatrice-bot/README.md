@@ -70,9 +70,8 @@ Ensuite :
 
 1. Vérifier que `RESEND_API_KEY` et `QUOTE_REGISTER_PASSWORD` existent :
    `npx.cmd wrangler secret list`. Sinon, `npx.cmd wrangler secret put <NOM>`.
-   HubSpot n'est plus utilisé : chaque fiche ou soumission envoyée ajoute une
-   ligne dans la table D1 `messenger_leads` (base `solution-nrj-contacts`),
-   relue chaque heure pour Dolibarr.
+   HubSpot n'est plus utilisé : l'ordinateur de Solution NRJ importe chaque
+   heure les prospects du KV `BOT_STATE` (clés `lead:<psid>`) dans Dolibarr.
 2. Test par Frederic seul : `MESSENGER_ENABLED = "true"` et
    `MESSENGER_OWNER_ONLY = "true"` (réglages actuels). Seul le compte du
    secret `MESSENGER_OWNER_TEST_PSID` reçoit des réponses.
