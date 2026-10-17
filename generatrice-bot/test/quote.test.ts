@@ -23,6 +23,8 @@ test("phases déduites de la tension", () => {
   assert.equal(phasesFor("600 V"), "Triphasé");
   assert.equal(phasesFor("347/600 V"), "Triphasé");
   assert.equal(phasesFor("480 V"), "Triphasé");
+  assert.equal(phasesFor("550 V"), "Triphasé"); // même réseau que le 600 V
+  assert.equal(phasesFor("575 V"), "Triphasé");
   assert.equal(phasesFor(null), "À confirmer");
 });
 
@@ -140,6 +142,9 @@ test("le prompt interdit de planifier une installation", async () => {
   assert.match(systemPrompt(), /ne dis jamais qu'elle est envoyée/);
   assert.match(systemPrompt(), /courrier indésirable/);
   assert.match(systemPrompt(), /ARRÊTE les questions de qualification/);
+  // 550 V et 575 V : même réseau que le 600 V, ni refus ni transfert.
+  assert.match(systemPrompt(), /550 V et 575 V : c'est le même réseau que le 600 V \(347\/600 V triphasé\)/);
+  assert.match(systemPrompt(), /550 V ou 575 V = 347\/600 V triphasé/);
 });
 
 test("fetch jamais appelé comme méthode d'un objet (règle de Workers : Illegal invocation)", async () => {

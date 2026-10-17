@@ -118,7 +118,7 @@ export function findModel(key: string): Model | undefined {
 export function phasesFor(voltage: string | null): string {
   const v = (voltage ?? "").replace(/\s/g, "").toUpperCase();
   if (["120/240V", "240V", "120V"].includes(v)) return "Monophasé";
-  if (["120/208V", "208V", "347/600V", "600V", "480V", "277/480V"].includes(v)) return "Triphasé";
+  if (["120/208V", "208V", "347/600V", "600V", "550V", "575V", "480V", "277/480V"].includes(v)) return "Triphasé";
   return "À confirmer";
 }
 
