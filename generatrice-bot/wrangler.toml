@@ -1,5 +1,5 @@
 # Remplace l'ancien bot ChatGPT : même nom de Worker, donc mêmes secrets Meta,
-# HubSpot, registre et Resend déjà installés sur Cloudflare.
+# registre et Resend déjà installés sur Cloudflare.
 name = "solution-nrj-messenger"
 main = "src/index.ts"
 account_id = "d54137d1bad690d828265766d3f36566"
@@ -19,10 +19,9 @@ MESSENGER_OWNER_ONLY = "false"
 MESSENGER_NEW_ONLY = "true"
 # Pause du bot quand un humain prend la conversation.
 HUMAN_PAUSE_HOURS = "24"
-# Soumissions : registre des numéros, HubSpot, courriel Resend.
+# Soumissions : registre des numéros, courriel Resend.
 QUOTE_REGISTER_URL = "https://solution-nrj-soumissions.monscorbu.workers.dev"
 QUOTE_WRITES_ENABLED = "true"
-HUBSPOT_WRITES_ENABLED = "true"
 QUOTATION_EMAIL_ENABLED = "true"
 
 # Appels vers l'application des soumissions (numéros S-AAAA-NNNN) : liaison directe,
@@ -39,6 +38,13 @@ enabled = true
 [[kv_namespaces]]
 binding = "BOT_STATE"
 id = "ecf9cef5e0a14f4cbe57b636398bbcb0"
+
+# CRM Dolibarr : chaque fiche ou soumission envoyée ajoute une ligne dans
+# messenger_leads ; l'ordinateur de Solution NRJ la relit chaque heure.
+[[d1_databases]]
+binding = "LEADS_DB"
+database_name = "solution-nrj-contacts"
+database_id = "f5662850-fe45-4c17-bfd8-bd818caf771f"
 
 # Durable Objects de l'ancien bot : conservés tels quels (voir src/index.ts).
 [[durable_objects.bindings]]
@@ -59,7 +65,7 @@ new_sqlite_classes = ["MailGate"]
 
 # Secrets (jamais dans ce fichier), déjà présents sur l'ancien Worker sauf indication :
 #   META_APP_SECRET, META_PAGE_ACCESS_TOKEN, META_VERIFY_TOKEN, ADMIN_TOKEN,
-#   RESEND_API_KEY, HUBSPOT_ACCESS_TOKEN, QUOTE_REGISTER_PASSWORD,
+#   RESEND_API_KEY, QUOTE_REGISTER_PASSWORD,
 #   MESSENGER_EXISTING_BASELINE, MESSENGER_ACTIVATED_AT, MESSENGER_OWNER_TEST_PSID
 # Nouveau :  npx wrangler secret put ANTHROPIC_API_KEY
 # À retirer : npx wrangler secret delete OPENAI_API_KEY

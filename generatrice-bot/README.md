@@ -51,7 +51,7 @@ client le demande.
 ## Déployer à la place de l'ancien bot ChatGPT (depuis le portable)
 
 Le Worker garde le nom `solution-nrj-messenger` : les secrets déjà installés
-(Meta, HubSpot, registre des soumissions, Resend, ADMIN_TOKEN) sont conservés,
+(Meta, registre des soumissions, Resend, ADMIN_TOKEN) sont conservés,
 et les Durable Objects de l'ancien bot ne sont pas touchés. Le bot est déployé
 **éteint** (`MESSENGER_ENABLED = "false"`).
 
@@ -68,9 +68,11 @@ npx.cmd wrangler deploy
 
 Ensuite :
 
-1. Vérifier que `RESEND_API_KEY`, `HUBSPOT_ACCESS_TOKEN` et
-   `QUOTE_REGISTER_PASSWORD` existent : `npx.cmd wrangler secret list`.
-   Sinon, `npx.cmd wrangler secret put <NOM>`.
+1. Vérifier que `RESEND_API_KEY` et `QUOTE_REGISTER_PASSWORD` existent :
+   `npx.cmd wrangler secret list`. Sinon, `npx.cmd wrangler secret put <NOM>`.
+   HubSpot n'est plus utilisé : chaque fiche ou soumission envoyée ajoute une
+   ligne dans la table D1 `messenger_leads` (base `solution-nrj-contacts`),
+   relue chaque heure pour Dolibarr.
 2. Test par Frederic seul : `MESSENGER_ENABLED = "true"` et
    `MESSENGER_OWNER_ONLY = "true"` (réglages actuels). Seul le compte du
    secret `MESSENGER_OWNER_TEST_PSID` reçoit des réponses.

@@ -1,11 +1,11 @@
 // Soumission officielle : numéro réservé dans l'application « solution-nrj-soumissions »,
 // PDF au format approuvé, envoi par Resend depuis ventes@solutionnrj.com.
 import { QUOTE_CONDITIONS, type Model } from "./catalogue.ts";
-import { HubSpot, hubspotEnabled, type HubSpotEnv } from "./hubspot.ts";
+import type { LeadsEnv } from "./crm.ts";
 import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type QuoteClient } from "./quote-pdf.ts";
 
 
-export interface QuoteEnv extends HubSpotEnv {
+export interface QuoteEnv extends LeadsEnv {
   QUOTE_REGISTER_URL: string;
   /**
    * Liaison de service vers le Worker « solution-nrj-soumissions ». Obligatoire en
@@ -21,8 +21,6 @@ export interface QuoteEnv extends HubSpotEnv {
 
 export interface QuoteRequest {
   psid: string;
-  /** Contact HubSpot du client (requis, comme pour le générateur officiel). */
-  contactId?: string;
   model: Model;
   client: QuoteClient & { email: string };
   quantity: number;
@@ -60,8 +58,7 @@ export function quoteSendingEnabled(env: QuoteEnv): boolean {
     env.QUOTATION_EMAIL_ENABLED === "true" &&
     env.QUOTE_WRITES_ENABLED === "true" &&
     Boolean(env.RESEND_API_KEY) &&
-    Boolean(env.QUOTE_REGISTER_PASSWORD) &&
-    hubspotEnabled(env)
+    Boolean(env.QUOTE_REGISTER_PASSWORD)
   );
 }
 
@@ -87,13 +84,13 @@ export async function reserveQuoteNumber(
 
   const c = req.client;
   const client = {
-    id: req.contactId ? `hubspot-${req.contactId}` : `messenger-${req.psid}`,
+    id: `messenger-${req.psid}`,
     name: c.fullName,
     company: c.company ?? "",
     email: c.email,
     phone: c.phone ?? "",
     address: c.address ?? "",
-    notes: req.contactId ? `Contact HubSpot ${req.contactId}` : "Client Messenger",
+    notes: "Client Messenger",
   };
   const clientRes = await register(`${base}/api/clients`, { method: "POST", headers, body: JSON.stringify(client), signal: AbortSignal.timeout(15000) });
   if (!clientRes.ok) throw new Error(`quote_client_${clientRes.status}`);
@@ -149,46 +146,20 @@ const html = (lines: string[]) =>
   SIGNATURE_HTML +
   "</div>";
 
-export interface QuoteResultWithCrm extends QuoteResult {
-  contactId: string;
-  dealId: string;
-  fileId: string;
-}
-
 /**
- * Parcours complet, dans l'ordre de l'ancien service Messenger :
- * contact HubSpot (retrouvé ou créé, jamais écrasé) → affaire → numéro du registre → PDF →
- * archive privée HubSpot → courriel Resend → étape de l'affaire + note.
- * Un contact existant est réutilisé sans être modifié.
+ * Parcours complet : numéro du registre → PDF → courriel Resend (copie à l'équipe).
+ * La demande est ensuite ajoutée pour Dolibarr par l'appelant (voir crm.ts).
  */
-export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResultWithCrm> {
+export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchImpl: typeof fetch = fetch): Promise<QuoteResult> {
   if (req.model.priceCad === null || !req.model.quotable) throw new Error("not_quotable");
   if (!isEmail(req.client.email) || !req.client.fullName.trim()) throw new Error("client_identity_required");
-
-  const hub = new HubSpot(env, fetchImpl);
-  const crmLead = { fullName: req.client.fullName, email: req.client.email, phone: req.client.phone, company: req.client.company, address: req.client.address, powerKw: req.model.powerKw };
-  const contact = await hub.findOrCreateContact(crmLead);
-  const contactId = contact.id;
-  if (contact.existing) {
-    // Contact déjà connu : ses champs restent tels quels, les infos données dans Messenger vont en note.
-    await hub.note(
-      contactId,
-      ["Demande Messenger (contact existant, champs non modifiés). Informations données par le client :",
-        `Nom : ${req.client.fullName}`,
-        req.client.company ? `Entreprise : ${req.client.company}` : "À titre personnel",
-        req.client.address ? `Adresse : ${req.client.address}` : null,
-        req.client.phone ? `Téléphone : ${req.client.phone}` : null,
-      ].filter(Boolean).join("\n"),
-    );
-  }
-  const dealId = await hub.createDeal(contactId, crmLead, "qualifiedtobuy");
 
   // Même soumission (mêmes données, même jour) → même numéro ; une donnée change → nouvelle soumission.
   const fingerprint = await sha256Hex(
     JSON.stringify([req.psid, req.model.key, req.quantity, req.voltage, req.issuedOn, req.client.fullName, req.client.company, req.client.email, req.client.phone, req.client.address]),
   );
   const requestId = `messenger-${req.psid}-${req.model.key}-${fingerprint.slice(0, 16)}`;
-  const quote = await reserveQuoteNumber(env, { ...req, contactId }, requestId, fetchImpl);
+  const quote = await reserveQuoteNumber(env, req, requestId, fetchImpl);
   const revision = quote.revision || 1;
   const validUntil = addMonths(req.issuedOn);
   const pdf = await buildQuotePdf({
@@ -201,9 +172,6 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
     quantity: req.quantity,
     voltage: req.voltage,
   });
-  const fileId = await hub.archivePdf(contactId, pdf, quote.number);
-  await hub.note(contactId, `Soumission ${quote.number} générée. Envoi non confirmé.`, fileId);
-
   const totals = computeTotals(req.model.priceCad, req.quantity);
   const title = req.model.name.replace(/ \(ouverte\)$/, "");
   const lines = [
@@ -236,9 +204,7 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
   const emailId = await sendEmail(env, payload, `messenger-quote-${quote.number}-R${revision}-${contentHash}`, fetchImpl);
 
   // Le courriel est accepté par Resend : ce n'est pas une preuve de réception.
-  await hub.setDealStage(dealId, "presentationscheduled");
-  await hub.note(contactId, `Soumission ${quote.number}. Courriel accepté par Resend : ${emailId}. Destinataire : ${req.client.email}. Livraison en boîte non confirmée.`, fileId);
-  return { number: quote.number, revision, emailId, total: totals.total, deposit: totals.deposit, contactId, dealId, fileId };
+  return { number: quote.number, revision, emailId, total: totals.total, deposit: totals.deposit };
 }
 
 /** Fiche détaillée par courriel (sans numéro de soumission). */
@@ -269,33 +235,4 @@ export async function sendSpecSheet(
   // (409) une fiche renvoyée dans les 24 h avec un texte ou un nom différent.
   const contentHash = (await sha256Hex(JSON.stringify(payload))).slice(0, 16);
   return sendEmail(env, payload, `messenger-fiche-${args.psid}-${m.key}-${contentHash}`, fetchImpl);
-}
-
-/** Fiche envoyée : retrouve ou crée le contact HubSpot (jamais modifié) et note la demande. */
-export async function recordSpecSheetContact(
-  env: QuoteEnv,
-  args: { model: Model; email: string; name: string | null; company: string | null; phone: string | null },
-  fetchImpl: typeof fetch = fetch,
-): Promise<string | null> {
-  if (!hubspotEnabled(env)) return null;
-  const hub = new HubSpot(env, fetchImpl);
-  const contact = await hub.findOrCreateContact({
-    fullName: args.name ?? "",
-    email: args.email,
-    phone: args.phone,
-    company: args.company,
-    address: null,
-    powerKw: args.model.powerKw,
-  });
-  await hub.note(
-    contact.id,
-    [
-      `Fiche envoyée par Messenger : ${args.model.name.replace(/ \(ouverte\)$/, "")}.`,
-      contact.existing ? "Contact existant, champs non modifiés. Informations données :" : "Informations données :",
-      args.name ? `Nom : ${args.name}` : null,
-      args.company ? `Entreprise : ${args.company}` : null,
-      args.phone ? `Téléphone : ${args.phone}` : null,
-    ].filter(Boolean).join("\n"),
-  );
-  return contact.id;
 }

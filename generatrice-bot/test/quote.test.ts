@@ -52,26 +52,19 @@ test("chaque modèle avec prix produit un PDF d'une page", async () => {
 
 const request = { psid: "u1", model: findModel("perkins-60")!, quantity: 1, voltage: null, issuedOn: "2026-10-16", client: { fullName: "Luc Tremblay", company: null, email: "luc@example.com", phone: "8195551234", address: null } };
 
-test("sendOfficialQuote : HubSpot, numéro du registre, PDF archivé et envoyé, étape de l'affaire", async () => {
-  const { calls, fetchImpl } = fakeBackends();
+test("sendOfficialQuote : numéro du registre, PDF envoyé par courriel, aucun appel HubSpot", async () => {
+  const { calls, fetchImpl } = fakeBackends(); // tout appel inattendu (HubSpot compris) lève une erreur
   const result = await sendOfficialQuote(quoteEnv, request, fetchImpl);
 
   assert.equal(result.number, "S-2026-0042");
   assert.equal(result.total, 40241.25);
-  assert.equal(result.contactId, "501");
   const order = calls.map((c) => new URL(c.url).pathname);
-  // Contact et affaire avant le numéro ; archive avant le courriel ; étape après le courriel.
-  assert.ok(order.indexOf("/crm/v3/objects/contacts") < order.indexOf("/api/quotes"));
-  assert.ok(order.indexOf("/files/v3/files") < order.indexOf("/emails"));
-  assert.ok(order.indexOf("/emails") < order.indexOf("/crm/v3/objects/deals/901"));
+  assert.ok(order.indexOf("/api/quotes") < order.indexOf("/emails"));
+  assert.ok(!calls.some((c) => c.url.includes("hubapi")));
 
-  const contact = JSON.parse(String(calls.find((c) => c.url.endsWith("/crm/v3/objects/contacts"))!.init.body));
-  assert.deepEqual(contact.properties, { email: "luc@example.com", firstname: "Luc", lastname: "Tremblay", phone: "8195551234" });
   const quoteBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/quotes"))!.init.body));
   assert.match(quoteBody.requestId, /^messenger-u1-perkins-60-[0-9a-f]{16}$/);
-  assert.equal(quoteBody.clientId, "hubspot-501");
-  const stage = JSON.parse(String(calls.find((c) => c.url.endsWith("/deals/901"))!.init.body));
-  assert.equal(stage.properties.dealstage, "presentationscheduled");
+  assert.equal(quoteBody.clientId, "messenger-u1");
 
   const mailCall = calls.find((c) => c.url === "https://api.resend.com/emails")!;
   const mail = JSON.parse(String(mailCall.init.body));
@@ -81,22 +74,6 @@ test("sendOfficialQuote : HubSpot, numéro du registre, PDF archivé et envoyé,
   assert.equal(mail.attachments[0].filename, "S-2026-0042.pdf");
   assert.ok(atob(mail.attachments[0].content).startsWith("%PDF-"));
   assert.match((mailCall.init.headers as Record<string, string>)["Idempotency-Key"], /^messenger-quote-S-2026-0042-R1-[0-9a-f]{16}$/);
-});
-
-test("contact HubSpot existant : réutilisé sans être modifié, soumission envoyée quand même", async () => {
-  const { calls, fetchImpl } = fakeBackends({ existingContact: true });
-  const result = await sendOfficialQuote(quoteEnv, request, fetchImpl);
-  assert.equal(result.contactId, "77");
-  assert.equal(result.number, "S-2026-0042");
-  const paths = calls.map((c) => new URL(c.url).pathname);
-  assert.ok(!paths.includes("/crm/v3/objects/contacts"), "aucun contact créé ni modifié");
-  assert.ok(!calls.some((c) => c.init.method === "PATCH" && c.url.includes("/contacts/")), "aucun champ du contact écrasé");
-  assert.ok(paths.includes("/emails"));
-  const firstNote = JSON.parse(String(calls.find((c) => c.url.endsWith("/crm/v3/objects/notes"))!.init.body));
-  assert.match(firstNote.properties.hs_note_body, /contact existant/);
-  assert.equal(firstNote.associations[0].to.id, "77");
-  const quoteBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/quotes"))!.init.body));
-  assert.equal(quoteBody.clientId, "hubspot-77");
 });
 
 test("pas de soumission automatique pour le Kubota", async () => {

@@ -21,8 +21,8 @@ export interface Env extends GuardEnv {
   QUOTE_WRITES_ENABLED?: string;
   QUOTATION_EMAIL_ENABLED?: string;
   RESEND_API_KEY?: string;
-  HUBSPOT_ACCESS_TOKEN?: string;
-  HUBSPOT_WRITES_ENABLED?: string;
+  // Demandes Messenger pour Dolibarr (table messenger_leads).
+  LEADS_DB?: D1Database;
 }
 
 /** État d'une conversation : lecture et écriture immédiatement cohérentes. */

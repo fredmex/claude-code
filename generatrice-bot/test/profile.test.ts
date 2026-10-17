@@ -4,7 +4,7 @@ import { fetchProfileName } from "../src/messenger.ts";
 import { systemPrompt } from "../src/business.ts";
 import { runAgent } from "../src/agent.ts";
 import { DurableStore, handleEvent, type Env, type Store } from "../src/index.ts";
-import { fakeBackends, quoteEnv } from "./helpers.ts";
+import { fakeBackends, fakeLeadsDb, leadRow, quoteEnv } from "./helpers.ts";
 
 test("fetchProfileName : prénom et nom du profil Messenger, avec le jeton de Page", async () => {
   let seen: { url: string; auth: string | null } | null = null;
@@ -66,18 +66,18 @@ function fakeClaude(responses: object[]) {
   return { fetch, requests };
 }
 
-test("send_quote sans nom donné par le client : le nom du profil va sur la soumission et dans HubSpot", async () => {
+test("send_quote sans nom donné par le client : le nom du profil va sur la soumission et dans la ligne Dolibarr", async () => {
   const backends = fakeBackends();
+  const leads = fakeLeadsDb();
   const claude = fakeClaude([
     { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "send_quote", input: { model_key: "perkins-10", full_name: "", company: "Ferme Roy", email: "julie@example.com", phone: "450 555-0000", address: "", voltage: "", quantity: 1, client_confirmed: true } }] },
     { stop_reason: "end_turn", content: [{ type: "text", text: "Votre soumission S-2026-0042 a été envoyée." }] },
   ]);
   const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
-  const result = await runAgent({ apiKey: "t", model: "claude-opus-5-5", history: [], psid: "u1", now: "2026-10-16T00:00:00.000Z", userContent: [{ type: "text", text: "oui" }], lead: null, profileName: "Julie Roy", fetch: fetchImpl, quoteEnv });
+  const result = await runAgent({ apiKey: "t", model: "claude-opus-5-5", history: [], psid: "u1", now: "2026-10-16T00:00:00.000Z", userContent: [{ type: "text", text: "oui" }], lead: null, profileName: "Julie Roy", fetch: fetchImpl, quoteEnv: { ...quoteEnv, LEADS_DB: leads.db } });
   assert.equal(result.quote?.number, "S-2026-0042");
   assert.equal(result.lead?.name, "Julie Roy");
-  const contact = backends.calls.find((c) => c.url.endsWith("/crm/v3/objects/contacts"));
-  assert.match(String(contact?.init.body), /"firstname":"Julie","lastname":"Roy"/);
+  assert.equal(leadRow(leads.inserts[0].values).full_name, "Julie Roy");
   assert.match(claude.requests[0].system, /« Julie Roy »/);
 });
 
