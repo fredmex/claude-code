@@ -72,6 +72,9 @@ test("sendOfficialQuote : numéro du registre, PDF envoyé par courriel, aucun a
   assert.deepEqual(mail.bcc, ["ventes@solutionnrj.com"]);
   assert.equal(mail.from, "Solution NRJ <ventes@solutionnrj.com>");
   assert.equal(mail.attachments[0].filename, "S-2026-0042.pdf");
+  // Signature : image hébergée sur le site, plus rien chez HubSpot.
+  assert.match(mail.html, /https:\/\/generatricediesel\.com\/images\/signature\/signature-solution-nrj\.jpg/);
+  assert.doesNotMatch(mail.html, /hubspot/i);
   assert.ok(atob(mail.attachments[0].content).startsWith("%PDF-"));
   assert.match((mailCall.init.headers as Record<string, string>)["Idempotency-Key"], /^messenger-quote-S-2026-0042-R1-[0-9a-f]{16}$/);
 });
