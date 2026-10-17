@@ -10,6 +10,15 @@ export interface Attachment {
   payload?: { url?: string; sticker_id?: number };
 }
 
+/** Provenance d'une conversation (publicité « Clic vers Messenger », lien m.me…). */
+export interface Referral {
+  source?: string;
+  type?: string;
+  ref?: string;
+  ad_id?: string;
+  ads_context_data?: { ad_title?: string };
+}
+
 export interface MessagingEvent {
   sender: { id: string };
   recipient: { id: string };
@@ -24,8 +33,11 @@ export interface MessagingEvent {
     metadata?: string;
     attachments?: Attachment[];
     quick_reply?: { payload: string };
+    referral?: Referral;
   };
-  postback?: { title: string; payload: string };
+  postback?: { title: string; payload: string; referral?: Referral };
+  // Événement messaging_referrals (client déjà en conversation qui clique une pub).
+  referral?: Referral;
 }
 
 /** Balise ajoutée à chaque message du bot, pour reconnaître ceux d'un humain. */
@@ -142,4 +154,23 @@ export async function sendAction(
   action: "mark_seen" | "typing_on" | "typing_off",
 ): Promise<void> {
   await callSendApi(pageAccessToken, { recipient: { id: recipientId }, sender_action: action });
+}
+
+export const SOURCE_AD = "Messenger – pub Facebook";
+export const SOURCE_PAGE = "Messenger – page Facebook";
+
+/** Provenance du premier contact : pub Facebook (referral ADS ou ad_id) ou message direct à la Page. */
+export interface Origin {
+  source: string | null;
+  ad_id: string | null;
+  ad_title: string | null;
+}
+
+export function originOf(event: MessagingEvent): Origin {
+  const referral = event.referral ?? event.message?.referral ?? event.postback?.referral;
+  if (referral && (referral.source === "ADS" || referral.ad_id)) {
+    const clean = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : null);
+    return { source: SOURCE_AD, ad_id: clean(referral.ad_id), ad_title: clean(referral.ads_context_data?.ad_title) };
+  }
+  return { source: SOURCE_PAGE, ad_id: null, ad_title: null };
 }

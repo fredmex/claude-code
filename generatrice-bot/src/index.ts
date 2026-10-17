@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { runAgent, type Turn } from "./agent.ts";
 import { emptyLead, leadsToCsv, listLeads, notifyTeam, putLead, type Lead } from "./leads.ts";
 import { AD_GREETING, customerGate, DAILY_REPLY_LIMIT, stopRequested, type GuardEnv } from "./guards.ts";
-import { BOT_METADATA, fetchProfileName, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
+import { BOT_METADATA, fetchProfileName, originOf, type Origin, sendAction, sendText, verifySignature, type MessagingEvent, type WebhookBody } from "./messenger.ts";
 
 export interface Env extends GuardEnv {
   BOT_STATE: KVNamespace;
@@ -203,7 +203,7 @@ async function resumeBot(request: Request, url: URL, env: Env): Promise<Response
 /** Retire pause, arrêt et compteur du jour ; avec reset, efface aussi l'historique et la fiche. */
 async function clearClientState(store: Store, reset: boolean): Promise<void> {
   const keys = ["pause", "stopped", `count:${new Date().toISOString().slice(0, 10)}`];
-  if (reset) keys.push("history", "lead", "profile");
+  if (reset) keys.push("history", "lead", "profile", "origin");
   await Promise.all(keys.map((k) => store.delete(k)));
 }
 
@@ -262,7 +262,7 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
       return;
     }
     await store.put("seen", seen.concat(message.mid).slice(-200));
-  } else if (!event.postback) {
+  } else if (!event.postback && !event.referral) {
     return; // accusés de lecture et de réception
   }
 
@@ -280,6 +280,15 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
     console.log(`Remise à zéro du test pour ${tail(psid)}`);
     return;
   }
+
+  // Provenance fixée au premier contact (pub ou Page), jamais écrasée ensuite. Une conversation
+  // commencée avant ce suivi garde une provenance inconnue (null) plutôt qu'une fausse.
+  if (!(await store.get<Origin>("origin"))) {
+    const started = ((await store.get<Turn[]>("history")) ?? []).length > 0;
+    await store.put("origin", started ? { source: null, ad_id: null, ad_title: null } : originOf(event));
+  }
+  // Clic sur une pub sans message : rien à répondre.
+  if (!message && !event.postback) return;
 
   // Le client a demandé qu'on ne le contacte plus.
   if (await store.get("stopped")) {
@@ -375,6 +384,10 @@ export async function handleEvent(event: MessagingEvent, env: Env, store: Store)
     console.log(`Pause pour ${tail(psid)} : transfert (${result.transferReason})`);
     const base = lead ?? emptyLead(psid, now);
     lead = { ...base, transferred: true, notes: [base.notes, `Transfert : ${result.transferReason}`].filter(Boolean).join(" — ") };
+  }
+  if (lead && !lead.source) {
+    const origin = await store.get<Origin>("origin");
+    if (origin) lead = { ...lead, ...origin };
   }
   if (lead) {
     await store.put("lead", lead);

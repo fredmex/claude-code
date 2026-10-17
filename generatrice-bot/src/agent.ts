@@ -216,6 +216,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
           doFetch,
         );
         state.quote = { ...result, modelName: model.name, email };
+        state.lead = { ...state.lead, quote_sent_at: input.now, quote_ref: result.number };
         state.lead = { ...state.lead, notes: [state.lead.notes, `Soumission ${result.number} envoyée (${model.name} × ${quantity})`].filter(Boolean).join(" — ") };
         return {
           content: JSON.stringify({
@@ -252,6 +253,7 @@ async function runTool(toolUse: Anthropic.Beta.BetaToolUseBlock, input: AgentInp
       }
       try {
         await sendSpecSheet(quoteEnv, { psid: input.psid, model, email, name: specName, rows: descriptionRows(model, null) }, doFetch);
+        state.lead = { ...state.lead, fiche_sent_at: input.now, fiche_model: model.key };
         return { content: JSON.stringify({ sent: true, email }) };
       } catch (error) {
         console.error("email_spec_sheet", error);

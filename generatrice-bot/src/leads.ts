@@ -15,6 +15,17 @@ export interface Lead {
   transferred: boolean;
   created_at: string;
   updated_at: string;
+  /** Provenance, fixée au premier contact : « Messenger – pub Facebook » ou « Messenger – page Facebook ». */
+  source?: string | null;
+  ad_id?: string | null;
+  /** Titre de la pub (ads_context_data.ad_title) ; Meta ne transmet pas le nom de la campagne. */
+  ad_title?: string | null;
+  /** Dernière fiche acceptée par Resend : date ISO et clé du modèle. */
+  fiche_sent_at?: string | null;
+  fiche_model?: string | null;
+  /** Dernière soumission acceptée par Resend : date ISO et numéro S-AAAA-NNNN. */
+  quote_sent_at?: string | null;
+  quote_ref?: string | null;
 }
 
 export type LeadUpdate = Partial<Pick<Lead, "name" | "company" | "usage" | "power_kw" | "city" | "voltage" | "enclosure" | "phone" | "email" | "notes">>;
@@ -38,6 +49,13 @@ export function emptyLead(psid: string, now: string): Lead {
     transferred: false,
     created_at: now,
     updated_at: now,
+    source: null,
+    ad_id: null,
+    ad_title: null,
+    fiche_sent_at: null,
+    fiche_model: null,
+    quote_sent_at: null,
+    quote_ref: null,
   };
 }
 
@@ -89,7 +107,7 @@ export async function listLeads(kv: KVNamespace): Promise<Lead[]> {
 }
 
 export function leadsToCsv(leads: Lead[]): string {
-  const columns = ["updated_at", "name", "company", "phone", "email", "city", "power_kw", "usage", "voltage", "enclosure", "notes", "transferred", "psid"] as const;
+  const columns = ["updated_at", "name", "company", "phone", "email", "city", "power_kw", "usage", "voltage", "enclosure", "notes", "transferred", "source", "ad_title", "fiche_sent_at", "quote_ref", "psid"] as const;
   const escape = (value: unknown) => {
     const text = value === null || value === undefined ? "" : String(value);
     // Le préfixe ' empêche Excel d'interpréter une valeur comme une formule.

@@ -111,7 +111,7 @@ test("ouvert au public : un client parle au bot, mais #reset n'est pas une comma
     await store.put("lead", { psid: CLIENT });
     await handleEvent(clientMsg("c2", "#reset"), publicEnv, store);
     assert.equal(net.claudeRequests.length, 2); // #reset traité comme un message ordinaire
-    assert.deepEqual(await store.get("lead"), { psid: CLIENT }); // rien n'est effacé
+    assert.equal((await store.get<{ psid: string }>("lead"))?.psid, CLIENT); // rien n'est effacé
   } finally {
     net.restore();
   }
@@ -131,6 +131,75 @@ test("message d'accueil de la pub : pas de pause ; réponse d'un humain : pause 
     assert.equal(await store.get("pause"), "humain");
     await handleEvent(clientMsg("c2", "merci"), publicEnv, store);
     assert.equal(net.claudeRequests.length, 1); // le bot se tait
+  } finally {
+    net.restore();
+  }
+});
+
+// Provenance du prospect pour Dolibarr : fixée au premier contact, jamais écrasée.
+const fromAd = (mid: string, text: string) => ({
+  ...clientMsg(mid, text),
+  message: { mid, text, referral: { source: "ADS", type: "OPEN_THREAD", ad_id: "120212345", ads_context_data: { ad_title: "Génératrices Perkins" } } },
+});
+
+test("provenance : premier message venu d'une pub → « Messenger – pub Facebook » avec ad_id et titre", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await store.put("lead", { psid: CLIENT, name: null });
+    await handleEvent(fromAd("a1", "je veux une 40 kW"), publicEnv, store);
+    await handleEvent(clientMsg("a2", "moi@example.com"), publicEnv, store);
+    const lead = await store.get<Record<string, unknown>>("lead");
+    assert.equal(lead?.source, "Messenger – pub Facebook");
+    assert.equal(lead?.ad_id, "120212345");
+    assert.equal(lead?.ad_title, "Génératrices Perkins");
+  } finally {
+    net.restore();
+  }
+});
+
+test("provenance : message direct à la Page, puis clic sur une pub plus tard → reste « page Facebook »", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await store.put("lead", { psid: CLIENT, name: null });
+    await handleEvent(clientMsg("p1", "bonjour"), publicEnv, store);
+    // Événement messaging_referrals seul (sans message) : pas de réponse, provenance inchangée.
+    await handleEvent({ sender: { id: CLIENT }, recipient: { id: "page" }, timestamp: Date.now(), referral: { source: "ADS", ad_id: "999" } } as any, publicEnv, store);
+    assert.equal(net.claudeRequests.length, 1);
+    await handleEvent(fromAd("p2", "je veux une 60 kW"), publicEnv, store);
+    const lead = await store.get<Record<string, unknown>>("lead");
+    assert.equal(lead?.source, "Messenger – page Facebook");
+    assert.equal(lead?.ad_id, null);
+  } finally {
+    net.restore();
+  }
+});
+
+test("provenance : un clic sur une pub avant le premier message compte comme premier contact", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await store.put("lead", { psid: CLIENT, name: null });
+    await handleEvent({ sender: { id: CLIENT }, recipient: { id: "page" }, timestamp: Date.now(), referral: { source: "ADS", ad_id: "777" } } as any, publicEnv, store);
+    assert.equal(net.claudeRequests.length, 0);
+    await handleEvent(clientMsg("r1", "bonjour"), publicEnv, store);
+    const lead = await store.get<Record<string, unknown>>("lead");
+    assert.equal(lead?.source, "Messenger – pub Facebook");
+    assert.equal(lead?.ad_id, "777");
+  } finally {
+    net.restore();
+  }
+});
+
+test("provenance : conversation déjà commencée avant le suivi → provenance inconnue (null), pas « page »", async () => {
+  const net = stubNetwork();
+  try {
+    const store: Store = new DurableStore(fakeStorage() as unknown as DurableObjectStorage);
+    await store.put("lead", { psid: CLIENT, name: null });
+    await store.put("history", [{ role: "user", text: "bonjour" }, { role: "assistant", text: "Bonjour!" }]);
+    await handleEvent(clientMsg("h1", "je veux une 40 kW"), publicEnv, store);
+    assert.equal((await store.get<Record<string, unknown>>("lead"))?.source ?? null, null);
   } finally {
     net.restore();
   }

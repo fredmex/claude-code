@@ -111,6 +111,9 @@ test("send_quote : la soumission part sans appel HubSpot ni transfert", async ()
   assert.equal(result.quote?.number, "S-2026-0042");
   assert.equal(result.transferReason, null);
   assert.equal(result.lead?.email, "marc@example.com");
+  // Pour Dolibarr : envoi de la soumission horodaté, avec son numéro.
+  assert.equal(result.lead?.quote_sent_at, "2026-10-16T00:00:00.000Z");
+  assert.equal(result.lead?.quote_ref, "S-2026-0042");
 });
 
 test("send_quote quand l'envoi automatique est désactivé : rien n'est envoyé, le client est enregistré", async () => {
@@ -147,6 +150,9 @@ test("fiche par courriel : envoyée sans appel HubSpot, nom, entreprise et tél�
   assert.equal(result.lead?.name, "Julie Roy");
   assert.equal(result.lead?.company, "Ferme Roy");
   assert.equal(result.lead?.phone, "4505550000");
+  assert.equal(result.lead?.fiche_sent_at, "2026-10-16T00:00:00.000Z");
+  assert.equal(result.lead?.fiche_model, "perkins-40");
+  assert.equal(result.lead?.quote_sent_at ?? null, null);
 });
 
 test("outils stricts : au plus 16 champs à type union (limite de l'API Claude)", async () => {
