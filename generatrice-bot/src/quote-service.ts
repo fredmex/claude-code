@@ -5,6 +5,8 @@ import { addMonths, buildQuotePdf, computeTotals, formatMoney, SUPPLIER, type Qu
 
 
 export interface QuoteEnv {
+  /** Mémoire du bot : reçoit aussi une copie des PDF envoyés (clés « pdf:… »). */
+  BOT_STATE?: KVNamespace;
   QUOTE_REGISTER_URL: string;
   /**
    * Liaison de service vers le Worker « solution-nrj-soumissions ». Obligatoire en
@@ -203,7 +205,33 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
   const emailId = await sendEmail(env, payload, `messenger-quote-${quote.number}-R${revision}-${contentHash}`, fetchImpl);
 
   // Le courriel est accepté par Resend : ce n'est pas une preuve de réception.
+  // Copie du PDF pour l'archive locale (relevée chaque heure par la tâche Dolibarr) :
+  // un échec est seulement journalisé, l'envoi reste valide.
+  await archiveQuotePdf(env, { number: quote.number, revision, psid: req.psid, modelKey: req.model.key, issuedOn: req.issuedOn }, pdf).catch((error) =>
+    console.error("archive_pdf", error),
+  );
   return { number: quote.number, revision, emailId, total: totals.total, deposit: totals.deposit };
+}
+
+/** Durée de conservation des copies de PDF dans BOT_STATE. */
+export const PDF_ARCHIVE_TTL_SECONDS = 90 * 24 * 3600;
+
+/**
+ * Dépose le PDF envoyé dans BOT_STATE, clé « pdf:S-AAAA-NNNN-R<révision> », avec ses
+ * métadonnées (sans courriel) ; une révision ne remplace jamais la précédente.
+ */
+export async function archiveQuotePdf(
+  env: QuoteEnv,
+  q: { number: string; revision: number; psid: string; modelKey: string; issuedOn: string },
+  pdf: Uint8Array,
+): Promise<string | null> {
+  if (!env.BOT_STATE) return null;
+  const key = `pdf:${q.number}-R${q.revision}`;
+  await env.BOT_STATE.put(key, pdf, {
+    expirationTtl: PDF_ARCHIVE_TTL_SECONDS,
+    metadata: { type: "soumission", numero: q.number, revision: q.revision, psid: q.psid, modele: q.modelKey, date: q.issuedOn },
+  });
+  return key;
 }
 
 /** Fiche détaillée par courriel (sans numéro de soumission). */

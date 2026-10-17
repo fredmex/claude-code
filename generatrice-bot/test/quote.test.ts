@@ -181,3 +181,30 @@ test("fiche renvoyée dans les 24 h avec un contenu différent : nouvelle clé R
   assert.equal(keys[1], keys[2]);
   assert.equal(sent.size, 2);
 });
+
+test("soumission envoyée : copie du PDF dans BOT_STATE (pdf:numéro-Rrévision, 90 jours, sans courriel)", async () => {
+  const puts: { key: string; value: unknown; options: any }[] = [];
+  const BOT_STATE = { put: async (key: string, value: unknown, options: unknown) => void puts.push({ key, value, options }) } as unknown as KVNamespace;
+  const { fetchImpl } = fakeBackends();
+  await sendOfficialQuote({ ...quoteEnv, BOT_STATE }, request, fetchImpl);
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].key, "pdf:S-2026-0042-R1");
+  assert.ok(new TextDecoder().decode((puts[0].value as Uint8Array).slice(0, 5)) === "%PDF-");
+  assert.equal(puts[0].options.expirationTtl, 90 * 24 * 3600);
+  assert.deepEqual(puts[0].options.metadata, { type: "soumission", numero: "S-2026-0042", revision: 1, psid: "u1", modele: "perkins-60", date: "2026-10-16" });
+  assert.doesNotMatch(JSON.stringify(puts[0].options.metadata), /@/);
+});
+
+test("échec de la copie du PDF : la soumission reste envoyée", async () => {
+  const BOT_STATE = { put: async () => { throw new Error("KV down"); } } as unknown as KVNamespace;
+  const { calls, fetchImpl } = fakeBackends();
+  const error = console.error;
+  console.error = () => {};
+  try {
+    const result = await sendOfficialQuote({ ...quoteEnv, BOT_STATE }, request, fetchImpl);
+    assert.equal(result.number, "S-2026-0042");
+    assert.ok(calls.some((c) => c.url === "https://api.resend.com/emails"));
+  } finally {
+    console.error = error;
+  }
+});
