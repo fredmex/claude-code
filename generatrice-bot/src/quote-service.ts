@@ -207,7 +207,7 @@ export async function sendOfficialQuote(env: QuoteEnv, req: QuoteRequest, fetchI
   // Le courriel est accepté par Resend : ce n'est pas une preuve de réception.
   // Copie du PDF pour l'archive locale (relevée chaque heure par la tâche Dolibarr) :
   // un échec est seulement journalisé, l'envoi reste valide.
-  await archiveQuotePdf(env, { number: quote.number, revision, psid: req.psid, modelKey: req.model.key, issuedOn: req.issuedOn }, pdf).catch((error) =>
+  await archiveQuotePdf(env, { number: quote.number, revision, psid: req.psid, modelKey: req.model.key, email: req.client.email }, pdf).catch((error) =>
     console.error("archive_pdf", error),
   );
   return { number: quote.number, revision, emailId, total: totals.total, deposit: totals.deposit };
@@ -218,18 +218,19 @@ export const PDF_ARCHIVE_TTL_SECONDS = 90 * 24 * 3600;
 
 /**
  * Dépose le PDF envoyé dans BOT_STATE, clé « pdf:S-AAAA-NNNN-R<révision> », avec ses
- * métadonnées (sans courriel) ; une révision ne remplace jamais la précédente.
+ * métadonnées pour l'import Dolibarr ; une révision ne remplace jamais la précédente.
  */
 export async function archiveQuotePdf(
   env: QuoteEnv,
-  q: { number: string; revision: number; psid: string; modelKey: string; issuedOn: string },
+  q: { number: string; revision: number; psid: string; modelKey: string; email: string | null },
   pdf: Uint8Array,
+  now = new Date().toISOString(),
 ): Promise<string | null> {
   if (!env.BOT_STATE) return null;
   const key = `pdf:${q.number}-R${q.revision}`;
   await env.BOT_STATE.put(key, pdf, {
     expirationTtl: PDF_ARCHIVE_TTL_SECONDS,
-    metadata: { type: "soumission", numero: q.number, revision: q.revision, psid: q.psid, modele: q.modelKey, date: q.issuedOn },
+    metadata: { type: "soumission", quote_ref: q.number, revision: q.revision, psid: q.psid, email: q.email, model_key: q.modelKey, created_at: now },
   });
   return key;
 }
