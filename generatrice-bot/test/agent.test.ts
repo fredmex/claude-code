@@ -167,3 +167,53 @@ test("outils stricts : au plus 16 champs à type union (limite de l'API Claude)"
   }
   assert.ok(unions <= MAX_UNION_PARAMS, `${unions} champs union`);
 });
+
+/** Texte des flux d'un PDF (décompressés), en clair et en hexadécimal (polices standard de pdf-lib). */
+async function pdfText(bytes: Uint8Array): Promise<string> {
+  const { inflateSync } = await import("node:zlib");
+  const raw = Buffer.from(bytes).toString("latin1");
+  const parts = [raw];
+  for (const m of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+    try {
+      parts.push(inflateSync(Buffer.from(m[1], "latin1")).toString("latin1"));
+    } catch {
+      // flux non compressé : déjà dans raw
+    }
+  }
+  const all = parts.join("\n");
+  const hex = [...all.matchAll(/<([0-9A-Fa-f]+)>/g)].map((m) => Buffer.from(m[1], "hex").toString("latin1")).join("");
+  return all + "\n" + hex;
+}
+
+test("provenance et horodatages : internes, absents des messages à Claude, des courriels et du PDF", async () => {
+  const backends = fakeBackends();
+  const claude = fakeClaude([
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "email_spec_sheet", input: { model_key: "perkins-10", email: "marc@example.com", name: "Marc Roy", company: "Roy inc.", phone: "" } }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "send_quote", input: { model_key: "perkins-10", full_name: "Marc Roy", company: "Roy inc.", email: "marc@example.com", phone: "", address: "", voltage: "", quantity: 1, client_confirmed: true } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: "Envoyées." }] },
+  ]);
+  const fetchImpl = (async (url: string, init: RequestInit) => (String(url).includes("anthropic") ? claude.fetch(url, init) : backends.fetchImpl(url, init))) as unknown as typeof fetch;
+  const lead = {
+    psid: "u1", name: "Marc Roy", company: null, usage: null, power_kw: 10, city: null, voltage: null, enclosure: null, phone: null, email: null, notes: null,
+    transferred: false, created_at: "2026-10-15T00:00:00.000Z", updated_at: "2026-10-15T00:00:00.000Z",
+    source: "Messenger – pub Facebook", ad_id: "120299887766", ad_title: "Promo Perkins automne",
+    fiche_sent_at: "2026-10-15T01:02:03.000Z", fiche_model: "perkins-10", quote_sent_at: "2026-10-15T04:05:06.000Z", quote_ref: "S-2026-0001",
+  };
+  const result = await runAgent({ ...base, userContent: [{ type: "text", text: "oui" }], lead, fetch: fetchImpl, quoteEnv });
+  assert.equal(result.quote?.number, "S-2026-0042");
+  assert.equal(result.lead?.source, "Messenger – pub Facebook"); // gardée dans la fiche prospect
+
+  const mails = backends.calls.filter((c) => c.url === "https://api.resend.com/emails").map((c) => JSON.parse(String(c.init.body)));
+  assert.equal(mails.length, 2);
+  const pdf = new Uint8Array(Buffer.from(mails[1].attachments[0].content, "base64"));
+  const pdfContent = await pdfText(pdf);
+  assert.match(pdfContent, /Marc Roy/); // l'extraction du PDF fonctionne bien
+  const sent = [
+    ...claude.requests.map((r) => JSON.stringify({ system: r.system, messages: r.messages })),
+    ...mails.map((m) => [m.subject, m.text, m.html].join("\n")),
+    pdfContent,
+  ];
+  for (const secret of ["pub Facebook", "page Facebook", "120299887766", "Promo Perkins automne", "fiche_sent_at", "quote_sent_at", "2026-10-15T01:02:03", "ad_title", "ad_id"]) {
+    for (const text of sent) assert.ok(!text.includes(secret), `« ${secret} » ne doit pas être envoyé`);
+  }
+});
